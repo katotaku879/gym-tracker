@@ -12,6 +12,8 @@ from utils.constants import (WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
                            WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT, APP_NAME)
 from .record_tab import RecordTab
 from .history_tab import HistoryTab
+from .body_stats_tab import BodyStatsTab
+
 
 # 統計タブをインポート
 try:
@@ -53,6 +55,7 @@ class MainWindow(QMainWindow):
         self.stats_tab: Optional[Union['StatsTab', QWidget]] = None
         self.goals_tab: Optional[Union['GoalsTab', QWidget]] = None
         self.settings_tab: Optional[QWidget] = None
+        self.body_stats_tab: Optional[BodyStatsTab] = None
         
         # データベースマネージャー初期化
         try:
@@ -212,6 +215,11 @@ class MainWindow(QMainWindow):
                 self.goals_tab = self.create_goals_placeholder()
                 self.tab_widget.addTab(self.goals_tab, "🎯 目標（実装中）")
                 self.logger.warning("Goals tab not available - using placeholder")
+
+            # 💊 体組成タブ（新規追加）
+            self.logger.info("Setting up Body Stats tab...")
+            self.body_stats_tab = BodyStatsTab(self.db_manager)
+            self.tab_widget.addTab(self.body_stats_tab, "📊 体組成")    
             
             # 設定タブ（プレースホルダー）
             self.settings_tab = self.create_settings_placeholder()
@@ -469,6 +477,16 @@ pip install --upgrade matplotlib pandas
                         self.statusBar().showMessage("統計データを更新しました", 2000)
                     except Exception as e:
                         self.logger.warning(f"Stats tab refresh failed: {e}")
+
+            # 💊 体組成タブに切り替わった時にデータを更新
+            elif "体組成" in tab_name and current_tab is self.body_stats_tab:
+                if self.body_stats_tab and hasattr(self.body_stats_tab, 'refresh_data'):
+                    try:
+                        self.body_stats_tab.refresh_data()
+                        self.statusBar().showMessage("体組成データを更新しました", 2000)
+                    except Exception as e:
+                        self.logger.warning(f"Body stats tab refresh failed: {e}")
+                                   
             
             # 目標タブに切り替わった時にデータを更新
             elif "目標" in tab_name and current_tab is self.goals_tab:
@@ -487,6 +505,7 @@ pip install --upgrade matplotlib pandas
                             self.statusBar().showMessage("目標データを更新しました", 2000)
                     except Exception as e:
                         self.logger.warning(f"Goals tab refresh failed: {e}")
+
                         
         except Exception as e:
             self.logger.warning(f"Tab change event failed: {e}")
@@ -573,8 +592,9 @@ pip install --upgrade matplotlib pandas
         """)
         status_bar.showMessage("準備完了 💪")
     
+    # 6. refresh_all_data メソッドを以下のように修正
     def refresh_all_data(self):
-        """全データ更新 - 完全修正版"""
+        """全データ更新 - 体組成タブ対応版"""
         try:
             self.statusBar().showMessage("データを更新中...", 1000)
             
@@ -594,10 +614,10 @@ pip install --upgrade matplotlib pandas
             else:
                 refresh_count += 1
             
-            # 目標タブのデータ更新
+            # 目標タブのデータ更新（既存のまま）
             if self.call_refresh_data(self.goals_tab):
                 refresh_count += 1
-                
+                    
                 # 目標進捗の自動更新
                 try:
                     if hasattr(self.db_manager, 'update_goal_progress_from_recent_records'):
@@ -607,12 +627,17 @@ pip install --upgrade matplotlib pandas
                 except Exception as e:
                     self.logger.warning(f"Goal progress auto-update failed: {e}")
             
+            # 💊 体組成タブの更新を追加
+            if self.call_refresh_data(self.body_stats_tab):
+                refresh_count += 1
+            
             self.statusBar().showMessage(f"✅ {refresh_count}個のタブのデータを更新しました", 3000)
             QMessageBox.information(self, "更新完了", f"📊 {refresh_count}個のタブを更新しました！")
             
         except Exception as e:
             self.logger.error(f"Data refresh failed: {e}")
             QMessageBox.warning(self, "更新エラー", f"データの更新に失敗しました:\n{str(e)}")
+            
     
     def create_backup(self):
         """バックアップ作成"""
