@@ -1,9 +1,11 @@
-# ui/main_window.py - 完全修正版（Pylanceエラー完全解消）
+# ui/main_window.py - インポート部分の修正
+
 import logging
+import importlib.util
 from typing import Optional, Union, Any, Protocol
 from PySide6.QtWidgets import (QMainWindow, QTabWidget, QVBoxLayout, 
                                QWidget, QMenuBar, QStatusBar, QMessageBox, 
-                               QLabel, QPushButton)
+                               QLabel, QPushButton, QDialog)  # ← QDialog を追加
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont
 
@@ -13,6 +15,7 @@ from utils.constants import (WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
 from .record_tab import RecordTab
 from .history_tab import HistoryTab
 from .body_stats_tab import BodyStatsTab
+
 
 
 # 統計タブをインポート
@@ -516,6 +519,20 @@ pip install --upgrade matplotlib pandas
         
         # ファイルメニュー
         file_menu = menubar.addMenu("📁 ファイル")
+
+        # データインポート・エクスポート サブメニュー
+        import_export_menu = file_menu.addMenu("📥📤 データ移行")
+        
+        # Appleヘルスからインポート
+        apple_health_import_action = QAction("📱 Appleヘルスからインポート", self)
+        apple_health_import_action.triggered.connect(self.import_from_apple_health)
+        import_export_menu.addAction(apple_health_import_action)
+        
+        # 将来の拡張用
+        import_export_menu.addSeparator()
+        csv_import_action = QAction("📄 CSVからインポート（準備中）", self)
+        csv_import_action.setEnabled(False)
+        import_export_menu.addAction(csv_import_action)
         
         # データ更新アクション
         refresh_action = QAction("🔄 データ更新", self)
@@ -591,6 +608,68 @@ pip install --upgrade matplotlib pandas
             }
         """)
         status_bar.showMessage("準備完了 💪")
+
+    # import_from_apple_health メソッドの完全版
+    def import_from_apple_health(self):
+        """Appleヘルスからのデータインポート - 完全版"""
+        try:
+            # 必要なモジュールの存在確認
+            import os
+            import importlib.util
+            
+            # ファイル存在チェック
+            dialog_path = os.path.join(os.path.dirname(__file__), "health_import_dialog.py")
+            importer_path = os.path.join(os.path.dirname(__file__), "..", "utils", "health_data_importer.py")
+            
+            if not os.path.exists(dialog_path):
+                QMessageBox.warning(self, "ファイル不足", 
+                                f"📱 以下のファイルが見つかりません:\n{dialog_path}\n\n"
+                                "health_import_dialog.py を ui/ フォルダに作成してください。")
+                return
+                
+            if not os.path.exists(importer_path):
+                QMessageBox.warning(self, "ファイル不足", 
+                                f"📱 以下のファイルが見つかりません:\n{importer_path}\n\n"
+                                "health_data_importer.py を utils/ フォルダに作成してください。")
+                return
+            
+            # モジュールインポート
+            try:
+                from ui.health_import_dialog import HealthImportDialog
+            except ImportError as e:
+                QMessageBox.critical(self, "インポートエラー", 
+                                f"health_import_dialog.py のインポートに失敗しました:\n{str(e)}\n\n"
+                                "ファイル内容を確認してください。")
+                return
+            
+            # ダイアログ実行
+            try:
+                dialog = HealthImportDialog(self.db_manager, self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    # インポート成功時の処理
+                    self.statusBar().showMessage("✅ Appleヘルスデータの移行が完了しました", 5000)
+                    
+                    # 体組成タブを更新
+                    if self.body_stats_tab and hasattr(self.body_stats_tab, 'refresh_data'):
+                        try:
+                            self.body_stats_tab.refresh_data()
+                        except Exception as e:
+                            self.logger.warning(f"Body stats tab refresh failed: {e}")
+                    
+                    # 体組成タブに切り替え
+                    for i in range(self.tab_widget.count()):
+                        if "体組成" in self.tab_widget.tabText(i):
+                            self.tab_widget.setCurrentIndex(i)
+                            break
+                            
+            except Exception as dialog_error:
+                QMessageBox.critical(self, "ダイアログエラー", 
+                                f"移行ダイアログでエラーが発生しました:\n{str(dialog_error)}")
+                                
+        except Exception as e:
+            self.logger.error(f"Apple Health import failed: {e}")
+            QMessageBox.critical(self, "予期しないエラー", 
+                            f"予期しないエラーが発生しました:\n{str(e)}")
     
     # 6. refresh_all_data メソッドを以下のように修正
     def refresh_all_data(self):
