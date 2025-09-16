@@ -10,6 +10,7 @@ import os
 from .models import Exercise, Workout, Set, Goal, BodyStats
 from utils.constants import DB_FILE
 from utils.calculations import calculate_one_rm
+from typing import List, Dict, Optional, Tuple
 
 class DatabaseManager:
     def __init__(self, db_file: str = DB_FILE):
@@ -382,23 +383,365 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Record count fetch failed: {e}")
             return 0
+        
+    # database/db_manager.py に追加するメソッド群
+# 既存のファイルの末尾に以下のメソッドを追加してください
 
-    # Backup and utility methods
-    def backup_database(self, backup_dir: str = "backup") -> bool:
-        """データベースバックアップ"""
+    def backup_database(self) -> bool:
+        """データベースバックアップ作成"""
         try:
-            if not os.path.exists(self.db_file):
-                return True  # ファイルが存在しない場合はOK
+            import shutil
+            import os
+            from datetime import datetime
             
+            # backupディレクトリ作成
+            backup_dir = "backup"
             if not os.path.exists(backup_dir):
                 os.makedirs(backup_dir)
             
+            # バックアップファイル名（タイムスタンプ付き）
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_file = os.path.join(backup_dir, f"gym_tracker_backup_{timestamp}.db")
             
+            # ファイルコピー
             shutil.copy2(self.db_file, backup_file)
-            self.logger.info(f"Backup created: {backup_file}")
+            
+            self.logger.info(f"Database backup created: {backup_file}")
             return True
+            
         except Exception as e:
-            self.logger.error(f"Backup failed: {e}")
+            self.logger.error(f"Database backup failed: {e}")
             return False
+    
+    def get_best_records(self) -> List[Dict]:
+        """ベスト記録取得（統計タブ用）"""
+        try:
+            with self.get_connection() as conn:
+                query = """
+                SELECT 
+                    e.name || '（' || e.variation || '）' as exercise_name,
+                    MAX(s.weight) as max_weight,
+                    MAX(s.reps) as max_reps,
+                    MAX(s.one_rm) as max_one_rm
+                FROM sets s
+                JOIN exercises e ON s.exercise_id = e.id
+                GROUP BY s.exercise_id
+                HAVING COUNT(s.id) > 0
+                ORDER BY max_one_rm DESC
+                LIMIT 10
+                """
+                cursor = conn.execute(query)
+                columns = [description[0] for description in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Failed to get best records: {e}")
+            return []
+    
+    def get_workout_statistics(self) -> Dict[str, float]:
+        """ワークアウト統計取得（統計タブ用）"""
+        try:
+            with self.get_connection() as conn:
+                stats = {}
+                
+                # 総ワークアウト数
+                cursor = conn.execute("SELECT COUNT(DISTINCT id) FROM workouts")
+                result = cursor.fetchone()
+                stats['total_workouts'] = result[0] if result else 0
+                
+                # 総セット数
+                cursor = conn.execute("SELECT COUNT(*) FROM sets")
+                result = cursor.fetchone()
+                stats['total_sets'] = result[0] if result else 0
+                
+                # 平均セット数/ワークアウト
+                if stats['total_workouts'] > 0:
+                    stats['avg_sets_per_workout'] = stats['total_sets'] / stats['total_workouts']
+                else:
+                    stats['avg_sets_per_workout'] = 0
+                
+                # 連続トレーニング日数計算
+                stats['current_streak'] = self._calculate_current_streak(conn)
+                stats['max_streak'] = self._calculate_max_streak(conn)
+                
+                # 今月のトレーニング日数
+                cursor = conn.execute("""
+                    SELECT COUNT(DISTINCT date) 
+                    FROM workouts 
+                    WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now')
+                """)
+                result = cursor.fetchone()
+                stats['this_month_workouts'] = result[0] if result else 0
+                
+                # 平均重量
+                cursor = conn.execute("SELECT AVG(weight) FROM sets WHERE weight > 0")
+                result = cursor.fetchone()
+                stats['avg_weight'] = result[0] if result and result[0] else 0
+                
+                # 総重量（重量×回数）
+                cursor = conn.execute("SELECT SUM(weight * reps) FROM sets")
+                result = cursor.fetchone()
+                stats['total_volume'] = result[0] if result and result[0] else 0
+                
+                return stats
+        except Exception as e:
+            self.logger.error(f"Workout statistics fetch failed: {e}")
+            return {
+                'total_workouts': 0, 'total_sets': 0, 'avg_sets_per_workout': 0,
+                'current_streak': 0, 'max_streak': 0, 'this_month_workouts': 0,
+                'avg_weight': 0, 'total_volume': 0
+            }
+    
+    def _calculate_current_streak(self, conn) -> int:
+        """現在の連続トレーニング日数計算"""
+        try:
+            cursor = conn.execute("""
+                SELECT DISTINCT date 
+                FROM workouts 
+                ORDER BY date DESC
+                LIMIT 30
+            """)
+            dates = [row[0] for row in cursor.fetchall()]
+            
+            if not dates:
+                return 0
+            
+            from datetime import datetime, timedelta, date
+            today = date.today()
+            streak = 0
+            current_date = today
+            
+            for date_str in dates:
+                workout_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                
+                if workout_date == current_date or workout_date == current_date - timedelta(days=1):
+                    streak += 1
+                    current_date = workout_date - timedelta(days=1)
+                else:
+                    break
+            
+            return streak
+        except Exception as e:
+            self.logger.error(f"Current streak calculation failed: {e}")
+            return 0
+    
+    def _calculate_max_streak(self, conn) -> int:
+        """最長連続日数計算"""
+        try:
+            cursor = conn.execute("""
+                SELECT DISTINCT date 
+                FROM workouts 
+                ORDER BY date
+            """)
+            dates = [row[0] for row in cursor.fetchall()]
+            
+            if not dates:
+                return 0
+            
+            from datetime import datetime, timedelta
+            max_streak = 1
+            current_streak = 1
+            
+            for i in range(1, len(dates)):
+                prev_date = datetime.strptime(dates[i-1], '%Y-%m-%d').date()
+                curr_date = datetime.strptime(dates[i], '%Y-%m-%d').date()
+                
+                if curr_date == prev_date + timedelta(days=1):
+                    current_streak += 1
+                    max_streak = max(max_streak, current_streak)
+                else:
+                    current_streak = 1
+            
+            return max_streak
+        except Exception as e:
+            self.logger.error(f"Max streak calculation failed: {e}")
+            return 0
+    
+    def get_one_rm_progress(self, exercise_id: int, period_days: int) -> List[Dict]:
+        """1RM推移データ取得"""
+        try:
+            with self.get_connection() as conn:
+                if period_days > 0:
+                    query = """
+                    SELECT 
+                        w.date,
+                        MAX(s.one_rm) as one_rm
+                    FROM sets s
+                    JOIN workouts w ON s.workout_id = w.id
+                    WHERE s.exercise_id = ? AND w.date >= date('now', '-{} days')
+                    GROUP BY w.date
+                    ORDER BY w.date
+                    """.format(period_days)
+                else:
+                    query = """
+                    SELECT 
+                        w.date,
+                        MAX(s.one_rm) as one_rm
+                    FROM sets s
+                    JOIN workouts w ON s.workout_id = w.id
+                    WHERE s.exercise_id = ?
+                    GROUP BY w.date
+                    ORDER BY w.date
+                    """
+                cursor = conn.execute(query, (exercise_id,))
+                columns = [description[0] for description in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"1RM progress fetch failed: {e}")
+            return []
+    
+    def get_weight_progress(self, exercise_id: int, period_days: int) -> List[Dict]:
+        """重量推移データ取得"""
+        try:
+            with self.get_connection() as conn:
+                if period_days > 0:
+                    query = """
+                    SELECT 
+                        w.date,
+                        MAX(s.weight) as max_weight,
+                        AVG(s.weight) as avg_weight
+                    FROM sets s
+                    JOIN workouts w ON s.workout_id = w.id
+                    WHERE s.exercise_id = ? AND w.date >= date('now', '-{} days')
+                    GROUP BY w.date
+                    ORDER BY w.date
+                    """.format(period_days)
+                else:
+                    query = """
+                    SELECT 
+                        w.date,
+                        MAX(s.weight) as max_weight,
+                        AVG(s.weight) as avg_weight
+                    FROM sets s
+                    JOIN workouts w ON s.workout_id = w.id
+                    WHERE s.exercise_id = ?
+                    GROUP BY w.date
+                    ORDER BY w.date
+                    """
+                cursor = conn.execute(query, (exercise_id,))
+                columns = [description[0] for description in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Weight progress fetch failed: {e}")
+            return []
+    
+    def get_volume_progress(self, exercise_id: int, period_days: int) -> List[Dict]:
+        """ボリューム推移データ取得"""
+        try:
+            with self.get_connection() as conn:
+                if period_days > 0:
+                    query = """
+                    SELECT 
+                        w.date,
+                        SUM(s.weight * s.reps) as total_volume
+                    FROM sets s
+                    JOIN workouts w ON s.workout_id = w.id
+                    WHERE s.exercise_id = ? AND w.date >= date('now', '-{} days')
+                    GROUP BY w.date
+                    ORDER BY w.date
+                    """.format(period_days)
+                else:
+                    query = """
+                    SELECT 
+                        w.date,
+                        SUM(s.weight * s.reps) as total_volume
+                    FROM sets s
+                    JOIN workouts w ON s.workout_id = w.id
+                    WHERE s.exercise_id = ?
+                    GROUP BY w.date
+                    ORDER BY w.date
+                    """
+                cursor = conn.execute(query, (exercise_id,))
+                columns = [description[0] for description in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Volume progress fetch failed: {e}")
+            return []
+    
+    def get_frequency_analysis(self, period_days: int) -> List[Dict]:
+        """頻度分析データ取得"""
+        try:
+            with self.get_connection() as conn:
+                if period_days > 0:
+                    query = """
+                    SELECT 
+                        CASE strftime('%w', w.date)
+                            WHEN '0' THEN 6  -- 日曜日を6に
+                            WHEN '1' THEN 0  -- 月曜日を0に
+                            WHEN '2' THEN 1  -- 火曜日を1に
+                            WHEN '3' THEN 2  -- 水曜日を2に
+                            WHEN '4' THEN 3  -- 木曜日を3に
+                            WHEN '5' THEN 4  -- 金曜日を4に
+                            WHEN '6' THEN 5  -- 土曜日を5に
+                        END as day_of_week,
+                        COUNT(DISTINCT w.date) as count
+                    FROM workouts w
+                    WHERE w.date >= date('now', '-{} days')
+                    GROUP BY day_of_week
+                    ORDER BY day_of_week
+                    """.format(period_days)
+                else:
+                    query = """
+                    SELECT 
+                        CASE strftime('%w', w.date)
+                            WHEN '0' THEN 6  -- 日曜日を6に
+                            WHEN '1' THEN 0  -- 月曜日を0に
+                            WHEN '2' THEN 1  -- 火曜日を1に
+                            WHEN '3' THEN 2  -- 水曜日を2に
+                            WHEN '4' THEN 3  -- 木曜日を3に
+                            WHEN '5' THEN 4  -- 金曜日を4に
+                            WHEN '6' THEN 5  -- 土曜日を5に
+                        END as day_of_week,
+                        COUNT(DISTINCT w.date) as count
+                    FROM workouts w
+                    GROUP BY day_of_week
+                    ORDER BY day_of_week
+                    """
+                cursor = conn.execute(query)
+                results = cursor.fetchall()
+                
+                # 7日分のデータを作成（0件の曜日も含める）
+                week_data = [0] * 7
+                for row in results:
+                    day_index = row[0]
+                    count = row[1]
+                    if day_index is not None:
+                        week_data[day_index] = count
+                
+                return [{'day': i, 'count': count} for i, count in enumerate(week_data)]
+        except Exception as e:
+            self.logger.error(f"Frequency analysis fetch failed: {e}")
+            return [{'day': i, 'count': 0} for i in range(7)]
+    
+    def get_category_analysis(self, period_days: int) -> List[Dict]:
+        """部位別分析データ取得"""
+        try:
+            with self.get_connection() as conn:
+                if period_days > 0:
+                    query = """
+                    SELECT 
+                        e.category,
+                        COUNT(s.id) as count
+                    FROM sets s
+                    JOIN exercises e ON s.exercise_id = e.id
+                    JOIN workouts w ON s.workout_id = w.id
+                    WHERE w.date >= date('now', '-{} days')
+                    GROUP BY e.category
+                    ORDER BY count DESC
+                    """.format(period_days)
+                else:
+                    query = """
+                    SELECT 
+                        e.category,
+                        COUNT(s.id) as count
+                    FROM sets s
+                    JOIN exercises e ON s.exercise_id = e.id
+                    JOIN workouts w ON s.workout_id = w.id
+                    GROUP BY e.category
+                    ORDER BY count DESC
+                    """
+                cursor = conn.execute(query)
+                columns = [description[0] for description in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Category analysis fetch failed: {e}")
+            return []  
