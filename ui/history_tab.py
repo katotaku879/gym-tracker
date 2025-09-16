@@ -70,9 +70,21 @@ class HistoryTab(BaseTab):
         date_layout.addStretch()
         filter_layout.addLayout(date_layout)
         
-        # 2行目: 種目・検索フィルタ
+        # 2行目: 部位・種目・検索フィルタ
         filter_layout2 = QHBoxLayout()
-        
+
+        # 部位選択を追加
+        filter_layout2.addWidget(QLabel("部位:"))
+        self.category_filter = QComboBox()
+        self.category_filter.addItem("すべての部位", "all")
+        self.category_filter.addItem("胸", "胸")
+        self.category_filter.addItem("背中", "背中")
+        self.category_filter.addItem("脚", "脚")
+        self.category_filter.addItem("肩", "肩")
+        self.category_filter.addItem("腕", "腕")
+        self.category_filter.currentTextChanged.connect(self.on_category_filter_changed)
+        filter_layout2.addWidget(self.category_filter)
+
         filter_layout2.addWidget(QLabel("種目:"))
         self.exercise_filter = QComboBox()
         self.exercise_filter.setMinimumWidth(200)
@@ -159,25 +171,48 @@ class HistoryTab(BaseTab):
         """種目読み込み"""
         try:
             exercises = self.db_manager.get_all_exercises()
-            self.exercise_filter.clear()
+            self.exercises = exercises  # 追加: exercisesを保存
+            
+            # 最初はすべての種目を表示
+            self.update_exercise_filter("all")  # 変更
+                
+        except Exception as e:
+            self.show_error("データ読み込みエラー", "種目データの読み込みに失敗しました", str(e))
+    
+    def on_category_filter_changed(self) -> None:
+        """部位フィルター変更時の処理"""
+        selected_category = self.category_filter.currentData()
+        self.update_exercise_filter(selected_category)
+
+    def update_exercise_filter(self, category: str) -> None:
+        """種目フィルター更新"""
+        self.exercise_filter.clear()
+        
+        if category == "all":
             self.exercise_filter.addItem("全ての種目", None)
             
             # カテゴリ別に整理
             categories = {}
-            for exercise in exercises:
+            for exercise in self.exercises:
                 if exercise.category not in categories:
                     categories[exercise.category] = []
                 categories[exercise.category].append(exercise)
             
             # カテゴリ順で追加
-            for category in ["胸", "背中", "脚", "肩", "腕"]:
-                if category in categories:
-                    for exercise in categories[category]:
-                        self.exercise_filter.addItem(exercise.display_name(), exercise.id)
-                
-        except Exception as e:
-            self.show_error("データ読み込みエラー", "種目データの読み込みに失敗しました", str(e))
-    
+            for cat in ["胸", "背中", "脚", "肩", "腕"]:
+                if cat in categories:
+                    for exercise in categories[cat]:
+                        display_name = f"[{exercise.category}] {exercise.name} ({exercise.variation})"
+                        self.exercise_filter.addItem(display_name, exercise.id)
+        else:
+            # 選択された部位の種目のみ表示
+            self.exercise_filter.addItem("全ての種目", None)
+            filtered_exercises = [ex for ex in self.exercises if ex.category == category]
+            
+            for exercise in filtered_exercises:
+                display_name = f"{exercise.name} ({exercise.variation})"
+                self.exercise_filter.addItem(display_name, exercise.id)
+
     def load_history(self) -> None:
         """履歴読み込み（フィルタ対応版）"""
         try:

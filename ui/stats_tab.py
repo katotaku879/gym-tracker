@@ -78,25 +78,43 @@ class StatsTab(BaseTab):
         self.graph_type.addItem("🎯 部位別分析", "category_analysis")
         self.graph_type.currentTextChanged.connect(self.update_graph)
         row1_layout.addWidget(self.graph_type)
+
+        row1_layout.addStretch()
+        control_layout.addLayout(row1_layout)
+
+        # 【追加】2行目: 部位と種目選択
+        row2_layout = QHBoxLayout()
+        
+        # 部位選択
+        row2_layout.addWidget(QLabel("部位:"))
+        self.category_combo = QComboBox()
+        self.category_combo.addItem("すべての部位", "all")
+        self.category_combo.addItem("胸", "胸")
+        self.category_combo.addItem("背中", "背中")
+        self.category_combo.addItem("脚", "脚")
+        self.category_combo.addItem("肩", "肩")
+        self.category_combo.addItem("腕", "腕")
+        self.category_combo.currentTextChanged.connect(self.on_category_changed)
+        row2_layout.addWidget(self.category_combo)
         
         # 種目選択
-        row1_layout.addWidget(QLabel("種目:"))
+        row2_layout.addWidget(QLabel("種目:"))
         self.exercise_combo = QComboBox()
         self.exercise_combo.currentTextChanged.connect(self.update_graph)
-        row1_layout.addWidget(self.exercise_combo)
+        row2_layout.addWidget(self.exercise_combo)
         
         # 更新ボタン
         refresh_btn = QPushButton("🔄 更新")
         refresh_btn.clicked.connect(self.refresh_data)
         row1_layout.addWidget(refresh_btn)
         
-        row1_layout.addStretch()
-        control_layout.addLayout(row1_layout)
+        row2_layout.addStretch()
+        control_layout.addLayout(row2_layout)
         
-        # 2行目: 期間選択
-        row2_layout = QHBoxLayout()
+        # 【修正】3行目: 期間選択 (既存の2行目を3行目に)
+        row3_layout = QHBoxLayout()
         
-        row2_layout.addWidget(QLabel("期間:"))
+        row3_layout.addWidget(QLabel("期間:"))
         self.period_combo = QComboBox()
         self.period_combo.addItem("過去1ヶ月", 30)
         self.period_combo.addItem("過去3ヶ月", 90)
@@ -105,10 +123,10 @@ class StatsTab(BaseTab):
         self.period_combo.addItem("全期間", -1)
         self.period_combo.setCurrentIndex(2)  # デフォルトは過去6ヶ月
         self.period_combo.currentTextChanged.connect(self.update_graph)
-        row2_layout.addWidget(self.period_combo)
+        row3_layout.addWidget(self.period_combo)
         
-        row2_layout.addStretch()
-        control_layout.addLayout(row2_layout)
+        row3_layout.addStretch()
+        control_layout.addLayout(row3_layout)  # row2_layout → row3_layout
         
         return control_group
     
@@ -203,26 +221,63 @@ class StatsTab(BaseTab):
         """種目読み込み"""
         try:
             exercises = self.db_manager.get_all_exercises()
-            self.exercise_combo.clear()
-            self.exercise_combo.addItem("💡 種目を選択してください", None)
+            self.exercises = exercises  # 👈 追加
             
-            # カテゴリ別に整理
+            # 最初はすべての種目を表示
+            self.update_exercise_combo("all")  # 👈 この1行で置き換え
+                
+        except Exception as e:
+            self.show_error("データ読み込みエラー", "種目データの読み込みに失敗しました", str(e))
+    
+    def on_category_changed(self) -> None:
+        """部位選択変更時の処理"""
+        selected_category = self.category_combo.currentData()
+        self.update_exercise_combo(selected_category)
+        self.update_graph()
+
+    def on_graph_type_changed(self) -> None:
+        """グラフタイプ変更時の処理"""
+        graph_type = self.graph_type.currentData()
+        
+        # 頻度分析と部位別分析では種目選択を無効化
+        if graph_type in ["frequency_analysis", "category_analysis"]:
+            self.category_combo.setEnabled(False)
+            self.exercise_combo.setEnabled(False)
+        else:
+            self.category_combo.setEnabled(True)
+            self.exercise_combo.setEnabled(True)
+        
+        self.update_graph()
+
+    def update_exercise_combo(self, category: str) -> None:
+        """種目コンボボックス更新"""
+        self.exercise_combo.clear()
+        
+        if category == "all":
+            self.exercise_combo.addItem("種目を選択してください", None)
+            
+            # カテゴリ別に整理して追加
             categories = {}
-            for exercise in exercises:
+            for exercise in self.exercises:
                 if exercise.category not in categories:
                     categories[exercise.category] = []
                 categories[exercise.category].append(exercise)
             
             # カテゴリ順で追加
-            for category in ["胸", "背中", "脚", "肩", "腕"]:
-                if category in categories:
-                    for exercise in categories[category]:
-                        display_name = f"{exercise.name}（{exercise.variation}）"
+            for cat in ["胸", "背中", "脚", "肩", "腕"]:
+                if cat in categories:
+                    for exercise in categories[cat]:
+                        display_name = f"[{exercise.category}] {exercise.name} ({exercise.variation})"
                         self.exercise_combo.addItem(display_name, exercise.id)
-                
-        except Exception as e:
-            self.show_error("データ読み込みエラー", "種目データの読み込みに失敗しました", str(e))
-    
+        else:
+            # 選択された部位の種目のみ表示
+            self.exercise_combo.addItem("種目を選択してください", None)
+            filtered_exercises = [ex for ex in self.exercises if ex.category == category]
+            
+            for exercise in filtered_exercises:
+                display_name = f"{exercise.name} ({exercise.variation})"
+                self.exercise_combo.addItem(display_name, exercise.id)
+
     def update_best_records(self) -> None:
         """ベスト記録更新"""
         try:
