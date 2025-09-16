@@ -745,3 +745,266 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Category analysis fetch failed: {e}")
             return []  
+        
+    # database/db_manager.py に追加するメソッド群
+
+    def init_goals_table(self):
+        """目標テーブルの初期化（既存のinit_databaseメソッドに追加）"""
+        with self.safe_transaction() as conn:
+            # goalsテーブル作成（notesカラムを追加）
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS goals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    exercise_id INTEGER,
+                    target_weight REAL NOT NULL,
+                    current_weight REAL NOT NULL,
+                    target_month TEXT NOT NULL,
+                    achieved BOOLEAN DEFAULT FALSE,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+                )
+            """)
+            
+            # インデックス作成
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_goals_exercise_id ON goals(exercise_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_goals_achieved ON goals(achieved)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_goals_target_month ON goals(target_month)")
+
+    def add_sample_goals(self):
+        """サンプル目標データの追加"""
+        try:
+            with self.safe_transaction() as conn:
+                # 既存データチェック
+                cursor = conn.execute("SELECT COUNT(*) FROM goals")
+                if cursor.fetchone()[0] > 0:
+                    return  # 既にデータが存在する場合はスキップ
+                
+                # サンプル目標データ
+                sample_goals = [
+                    (1, 100.0, 85.0, "2024-12-31", False, "年末までにベンチプレス100kg達成"),
+                    (5, 80.0, 65.0, "2024-11-30", False, "ダンベルフライ80kg目標"),
+                    (10, 120.0, 110.0, "2024-10-31", False, "デッドリフト120kg挑戦"),
+                    (15, 70.0, 70.0, "2024-09-30", True, "スクワット70kg達成済み"),
+                    (20, 50.0, 45.0, "2024-12-15", False, "ショルダープレス50kg目標"),
+                ]
+                
+                conn.executemany("""
+                    INSERT INTO goals (exercise_id, target_weight, current_weight, target_month, achieved, notes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, sample_goals)
+                
+                self.logger.info("Sample goals added successfully")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to add sample goals: {e}")
+
+    # Goal CRUD operations
+    def add_goal(self, goal: Goal) -> Optional[int]:
+        """目標追加"""
+        try:
+            with self.safe_transaction() as conn:
+                cursor = conn.execute("""
+                    INSERT INTO goals (exercise_id, target_weight, current_weight, 
+                                    target_month, achieved, notes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (goal.exercise_id, goal.target_weight, goal.current_weight,
+                    goal.target_month, goal.achieved, getattr(goal, 'notes', '')))
+                
+                goal_id = cursor.lastrowid
+                self.logger.info(f"Goal added: ID {goal_id}")
+                return goal_id
+        except Exception as e:
+            self.logger.error(f"Failed to add goal: {e}")
+            return None
+
+    def update_goal(self, goal: Goal) -> bool:
+        """目標更新"""
+        try:
+            with self.safe_transaction() as conn:
+                conn.execute("""
+                    UPDATE goals 
+                    SET exercise_id=?, target_weight=?, current_weight=?, 
+                        target_month=?, achieved=?, notes=?, 
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=?
+                """, (goal.exercise_id, goal.target_weight, goal.current_weight,
+                    goal.target_month, goal.achieved, getattr(goal, 'notes', ''), goal.id))
+                
+                self.logger.info(f"Goal updated: ID {goal.id}")
+                return True
+        except Exception as e:
+            self.logger.error(f"Failed to update goal: {e}")
+            return False
+
+    def delete_goal(self, goal_id: int) -> bool:
+        """目標削除"""
+        try:
+            with self.safe_transaction() as conn:
+                conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
+                self.logger.info(f"Goal deleted: ID {goal_id}")
+                return True
+        except Exception as e:
+            self.logger.error(f"Failed to delete goal: {e}")
+            return False
+
+    def get_all_goals(self) -> List[Dict]:
+        """全目標取得"""
+        try:
+            with self.get_connection() as conn:
+                query = """
+                    SELECT g.id, g.exercise_id, g.target_weight, g.current_weight,
+                        g.target_month, g.achieved, g.notes, g.created_at, g.updated_at,
+                        e.name || '（' || e.variation || '）' as exercise_name,
+                        e.category
+                    FROM goals g
+                    JOIN exercises e ON g.exercise_id = e.id
+                    ORDER BY g.achieved ASC, g.target_month ASC
+                """
+                cursor = conn.execute(query)
+                columns = [description[0] for description in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Failed to get goals: {e}")
+            return []
+
+    def get_goals_by_status(self, achieved: bool = False) -> List[Dict]:
+        """ステータス別目標取得"""
+        try:
+            with self.get_connection() as conn:
+                query = """
+                    SELECT g.id, g.exercise_id, g.target_weight, g.current_weight,
+                        g.target_month, g.achieved, g.notes,
+                        e.name || '（' || e.variation || '）' as exercise_name
+                    FROM goals g
+                    JOIN exercises e ON g.exercise_id = e.id
+                    WHERE g.achieved = ?
+                    ORDER BY g.target_month ASC
+                """
+                cursor = conn.execute(query, (achieved,))
+                columns = [description[0] for description in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Failed to get goals by status: {e}")
+            return []
+
+    def get_goals_summary(self) -> Dict[str, int]:
+        """目標統計サマリー取得"""
+        try:
+            with self.get_connection() as conn:
+                # 総目標数
+                cursor = conn.execute("SELECT COUNT(*) FROM goals")
+                total_goals = cursor.fetchone()[0]
+                
+                # 達成済み目標数
+                cursor = conn.execute("SELECT COUNT(*) FROM goals WHERE achieved = 1")
+                achieved_goals = cursor.fetchone()[0]
+                
+                # 今月期限の目標数
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM goals 
+                    WHERE strftime('%Y-%m', target_month) = strftime('%Y-%m', 'now')
+                    AND achieved = 0
+                """)
+                this_month_goals = cursor.fetchone()[0]
+                
+                # 期限切れ目標数
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM goals 
+                    WHERE date(target_month) < date('now')
+                    AND achieved = 0
+                """)
+                overdue_goals = cursor.fetchone()[0]
+                
+                return {
+                    'total': total_goals,
+                    'achieved': achieved_goals,
+                    'active': total_goals - achieved_goals,
+                    'this_month': this_month_goals,
+                    'overdue': overdue_goals,
+                    'achievement_rate': int((achieved_goals / total_goals * 100)) if total_goals > 0 else 0
+                }
+        except Exception as e:
+            self.logger.error(f"Failed to get goals summary: {e}")
+            return {'total': 0, 'achieved': 0, 'active': 0, 'this_month': 0, 'overdue': 0, 'achievement_rate': 0}
+
+    def update_goal_progress_from_recent_records(self):
+        """最新のトレーニング記録から目標の現在重量を自動更新"""
+        try:
+            with self.safe_transaction() as conn:
+                # 各目標について最新の1RMを取得して更新
+                cursor = conn.execute("""
+                    SELECT g.id, g.exercise_id, g.current_weight,
+                        MAX(s.one_rm) as latest_one_rm
+                    FROM goals g
+                    LEFT JOIN sets s ON g.exercise_id = s.exercise_id
+                    LEFT JOIN workouts w ON s.workout_id = w.id
+                    WHERE g.achieved = 0
+                    AND w.date >= date(g.created_at)
+                    GROUP BY g.id, g.exercise_id, g.current_weight
+                    HAVING latest_one_rm > g.current_weight
+                """)
+                
+                updates = cursor.fetchall()
+                update_count = 0
+                
+                for goal_id, exercise_id, current_weight, latest_one_rm in updates:
+                    conn.execute("""
+                        UPDATE goals 
+                        SET current_weight = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    """, (latest_one_rm, goal_id))
+                    update_count += 1
+                
+                if update_count > 0:
+                    self.logger.info(f"Updated {update_count} goals with latest progress")
+                    
+                return update_count
+        except Exception as e:
+            self.logger.error(f"Failed to update goal progress: {e}")
+            return 0
+
+# database/models.py のGoalクラスも拡張
+        @dataclass
+        class Goal:
+            """目標モデル - 拡張版"""
+            id: Optional[int]
+            exercise_id: int
+            target_weight: float
+            current_weight: float
+            target_month: str  # YYYY-MM-DD
+            achieved: bool = False
+            notes: Optional[str] = None
+            created_at: Optional[str] = None
+            updated_at: Optional[str] = None
+            
+            def progress_percentage(self) -> int:
+                """進捗率計算"""
+                if self.target_weight <= 0:
+                    return 0
+                return min(int((self.current_weight / self.target_weight) * 100), 100)
+            
+            def remaining_weight(self) -> float:
+                """残り重量計算"""
+                return max(0, self.target_weight - self.current_weight)
+            
+            def is_overdue(self) -> bool:
+                """期限切れ判定"""
+                try:
+                    from datetime import datetime, date
+                    target_date = datetime.strptime(self.target_month, '%Y-%m-%d').date()
+                    return target_date < date.today() and not self.achieved
+                except:
+                    return False
+            
+            def days_remaining(self) -> Optional[int]:
+                """残り日数計算"""
+                try:
+                    from datetime import datetime, date
+                    target_date = datetime.strptime(self.target_month, '%Y-%m-%d').date()
+                    today = date.today()
+                    delta = (target_date - today).days
+                    return max(0, delta)
+                except:
+                    return None    

@@ -323,3 +323,7 @@ class GoalsTab(BaseTab):
         self.edit_button.setEnabled(has_selection)
         self.delete_button.setEnabled(has_selection)
         self.achieve_button.setEnabled(has_selection)
+
+    def refresh_data(self) -> None:
+        """データ再読み込み（外部から呼び出し用）"""
+        self.load_goals()    

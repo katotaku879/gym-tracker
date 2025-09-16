@@ -1,6 +1,6 @@
-# ui/main_window.py - 型安全版（Pylanceエラー解消）
+# ui/main_window.py - 完全修正版（Pylanceエラー完全解消）
 import logging
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, Protocol
 from PySide6.QtWidgets import (QMainWindow, QTabWidget, QVBoxLayout, 
                                QWidget, QMenuBar, QStatusBar, QMessageBox, 
                                QLabel, QPushButton)
@@ -21,10 +21,27 @@ except ImportError as e:
     STATS_TAB_AVAILABLE = False
     print(f"Stats tab import failed: {e}")
 
-# from .goals_tab import GoalsTab  # 目標タブは後で実装
+# 目標タブをインポート
+try:
+    from .goals_tab import GoalsTab
+    GOALS_TAB_AVAILABLE = True
+except ImportError as e:
+    GOALS_TAB_AVAILABLE = False
+    print(f"Goals tab import failed: {e}")
+
+# 型定義用のプロトコル
+class RefreshableTab(Protocol):
+    """refresh_dataメソッドを持つタブのプロトコル"""
+    def refresh_data(self) -> None:
+        ...
+
+class LoadableTab(Protocol):
+    """load_exercisesメソッドを持つタブのプロトコル"""
+    def load_exercises(self) -> None:
+        ...
 
 class MainWindow(QMainWindow):
-    """メインウィンドウ - 型安全版"""
+    """メインウィンドウ - 完全修正版"""
     
     def __init__(self):
         super().__init__()
@@ -34,7 +51,7 @@ class MainWindow(QMainWindow):
         self.record_tab: Optional[RecordTab] = None
         self.history_tab: Optional[HistoryTab] = None
         self.stats_tab: Optional[Union['StatsTab', QWidget]] = None
-        self.goals_tab: Optional[QWidget] = None
+        self.goals_tab: Optional[Union['GoalsTab', QWidget]] = None
         self.settings_tab: Optional[QWidget] = None
         
         # データベースマネージャー初期化
@@ -59,9 +76,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} - 筋トレ記録・成長追跡アプリ")
         self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
-        
-        # ウィンドウアイコン設定（オプション）
-        # self.setWindowIcon(QIcon("resources/icon.png"))
         
         # 中央ウィジェット設定
         central_widget = QWidget()
@@ -114,9 +128,39 @@ class MainWindow(QMainWindow):
         
         # タブ追加
         self.setup_tabs()
+    
+    def has_refresh_data(self, obj: Any) -> bool:
+        """オブジェクトがrefresh_dataメソッドを持っているかチェック"""
+        return hasattr(obj, 'refresh_data') and callable(getattr(obj, 'refresh_data'))
+
+    def has_load_exercises(self, obj: Any) -> bool:
+        """オブジェクトがload_exercisesメソッドを持っているかチェック"""
+        return hasattr(obj, 'load_exercises') and callable(getattr(obj, 'load_exercises'))
+
+    def call_refresh_data(self, obj: Any) -> bool:
+        """型安全なrefresh_data呼び出し"""
+        try:
+            if self.has_refresh_data(obj):
+                obj.refresh_data()
+                return True
+            return False
+        except Exception as e:
+            self.logger.error(f"refresh_data call failed: {e}")
+            return False
+
+    def call_load_exercises(self, obj: Any) -> bool:
+        """型安全なload_exercises呼び出し"""
+        try:
+            if self.has_load_exercises(obj):
+                obj.load_exercises()
+                return True
+            return False
+        except Exception as e:
+            self.logger.error(f"load_exercises call failed: {e}")
+            return False
         
     def setup_tabs(self):
-        """タブ設定 - 型安全版"""
+        """タブ設定 - 完全修正版"""
         try:
             # 記録タブ
             self.logger.info("Setting up Record tab...")
@@ -148,9 +192,26 @@ class MainWindow(QMainWindow):
                 self.tab_widget.addTab(self.stats_tab, "📊 統計（要インストール）")
                 self.logger.warning("Stats tab not available - using placeholder")
             
-            # 目標タブ（プレースホルダー）
-            self.goals_tab = self.create_goals_placeholder()
-            self.tab_widget.addTab(self.goals_tab, "🎯 目標")
+            # 目標タブ（完全実装版）
+            if GOALS_TAB_AVAILABLE:
+                try:
+                    self.logger.info("Setting up Goals tab...")
+                    self.goals_tab = GoalsTab(self.db_manager)
+                    self.tab_widget.addTab(self.goals_tab, "🎯 目標")
+                    self.logger.info("Goals tab loaded successfully")
+                except Exception as e:
+                    self.logger.error(f"Goals tab creation failed: {e}")
+                    # フォールバック：プレースホルダー
+                    self.goals_tab = self.create_goals_placeholder()
+                    self.tab_widget.addTab(self.goals_tab, "🎯 目標（エラー）")
+                    QMessageBox.warning(self, "目標タブエラー", 
+                                      f"目標タブの作成に失敗しました:\n{str(e)}\n\n"
+                                      "プレースホルダーが表示されます。")
+            else:
+                # フォールバック：プレースホルダー
+                self.goals_tab = self.create_goals_placeholder()
+                self.tab_widget.addTab(self.goals_tab, "🎯 目標（実装中）")
+                self.logger.warning("Goals tab not available - using placeholder")
             
             # 設定タブ（プレースホルダー）
             self.settings_tab = self.create_settings_placeholder()
@@ -263,7 +324,26 @@ pip install --upgrade matplotlib pandas
         title.setStyleSheet("color: #f39c12; margin: 20px;")
         layout.addWidget(title)
         
-        message = QLabel("""
+        if not GOALS_TAB_AVAILABLE:
+            message = QLabel("""
+目標管理機能の読み込みに失敗しました 🚧
+
+📋 予定されている機能：
+• 月間目標設定
+• 進捗追跡
+• 達成率表示
+• 目標達成通知
+• 目標履歴管理
+
+🔧 トラブルシューティング：
+• goals_tab.py ファイルが存在するか確認
+• アプリケーションを再起動
+• エラーログを確認
+
+🔜 実装完了後に利用可能になります！
+            """)
+        else:
+            message = QLabel("""
 目標管理機能は開発中です 🚧
 
 📋 予定されている機能：
@@ -274,7 +354,8 @@ pip install --upgrade matplotlib pandas
 • 目標履歴管理
 
 🔜 近日公開予定です！
-        """)
+            """)
+        
         message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         message.setStyleSheet("""
             QLabel {
@@ -365,7 +446,7 @@ pip install --upgrade matplotlib pandas
                               "必要なライブラリがインストールされているか確認してください。")
     
     def on_tab_changed(self, index: int):
-        """タブ変更時の処理 - 型安全版"""
+        """タブ変更時の処理 - 完全修正版"""
         try:
             tab_name = self.tab_widget.tabText(index)
             current_tab = self.tab_widget.widget(index)
@@ -373,7 +454,7 @@ pip install --upgrade matplotlib pandas
             
             # 履歴タブに切り替わった時にデータを更新
             if "履歴" in tab_name and current_tab is self.history_tab:
-                if self.history_tab and hasattr(self.history_tab, 'refresh_data'):
+                if self.history_tab and self.has_refresh_data(self.history_tab):
                     try:
                         self.history_tab.refresh_data()
                         self.statusBar().showMessage("履歴データを更新しました", 2000)
@@ -382,30 +463,33 @@ pip install --upgrade matplotlib pandas
             
             # 統計タブに切り替わった時にデータを更新
             elif "統計" in tab_name and current_tab is self.stats_tab:
-                if self.stats_tab and hasattr(self.stats_tab, 'refresh_data'):
+                if self.stats_tab and self.has_refresh_data(self.stats_tab):
                     try:
-                        # 型チェック: StatsTabインスタンスかどうか確認
-                        if hasattr(self.stats_tab, 'refresh_data'):
-                            self.stats_tab.refresh_data()  # type: ignore
+                        self.call_refresh_data(self.stats_tab)
                         self.statusBar().showMessage("統計データを更新しました", 2000)
                     except Exception as e:
                         self.logger.warning(f"Stats tab refresh failed: {e}")
+            
+            # 目標タブに切り替わった時にデータを更新
+            elif "目標" in tab_name and current_tab is self.goals_tab:
+                if self.goals_tab and self.has_refresh_data(self.goals_tab):
+                    try:
+                        self.call_refresh_data(self.goals_tab)
+                        
+                        # 目標の進捗を最新のトレーニング記録から自動更新
+                        if hasattr(self.db_manager, 'update_goal_progress_from_recent_records'):
+                            updated_count = self.db_manager.update_goal_progress_from_recent_records()
+                            if updated_count > 0:
+                                self.statusBar().showMessage(f"目標データを更新しました（進捗更新: {updated_count}件）", 3000)
+                            else:
+                                self.statusBar().showMessage("目標データを更新しました", 2000)
+                        else:
+                            self.statusBar().showMessage("目標データを更新しました", 2000)
+                    except Exception as e:
+                        self.logger.warning(f"Goals tab refresh failed: {e}")
                         
         except Exception as e:
             self.logger.warning(f"Tab change event failed: {e}")
-    
-    def safe_call_method(self, obj: Any, method_name: str, *args, **kwargs) -> bool:
-        """安全なメソッド呼び出し"""
-        try:
-            if obj and hasattr(obj, method_name):
-                method = getattr(obj, method_name)
-                if callable(method):
-                    method(*args, **kwargs)
-                    return True
-            return False
-        except Exception as e:
-            self.logger.error(f"Method call failed: {method_name}, error: {e}")
-            return False
         
     def setup_menu(self):
         """メニューバー設定"""
@@ -490,25 +574,38 @@ pip install --upgrade matplotlib pandas
         status_bar.showMessage("準備完了 💪")
     
     def refresh_all_data(self):
-        """全データ更新 - 型安全版"""
+        """全データ更新 - 完全修正版"""
         try:
             self.statusBar().showMessage("データを更新中...", 1000)
             
-            # 各タブのデータを更新（安全な呼び出し）
+            # 各タブのデータを更新（型安全な呼び出し）
             refresh_count = 0
             
-            if self.safe_call_method(self.history_tab, 'refresh_data'):
+            if self.call_refresh_data(self.history_tab):
                 refresh_count += 1
             
-            if self.safe_call_method(self.stats_tab, 'refresh_data'):
+            if self.call_refresh_data(self.stats_tab):
                 refresh_count += 1
             
             # 記録タブには複数の可能性があるメソッド名
-            if not self.safe_call_method(self.record_tab, 'refresh_data'):
-                if self.safe_call_method(self.record_tab, 'load_exercises'):
+            if not self.call_refresh_data(self.record_tab):
+                if self.call_load_exercises(self.record_tab):
                     refresh_count += 1
             else:
                 refresh_count += 1
+            
+            # 目標タブのデータ更新
+            if self.call_refresh_data(self.goals_tab):
+                refresh_count += 1
+                
+                # 目標進捗の自動更新
+                try:
+                    if hasattr(self.db_manager, 'update_goal_progress_from_recent_records'):
+                        updated_goals = self.db_manager.update_goal_progress_from_recent_records()
+                        if updated_goals > 0:
+                            self.logger.info(f"Auto-updated {updated_goals} goals from recent records")
+                except Exception as e:
+                    self.logger.warning(f"Goal progress auto-update failed: {e}")
             
             self.statusBar().showMessage(f"✅ {refresh_count}個のタブのデータを更新しました", 3000)
             QMessageBox.information(self, "更新完了", f"📊 {refresh_count}個のタブを更新しました！")
@@ -574,7 +671,7 @@ pip install --upgrade matplotlib pandas
                 """)
                 tables = [row[0] for row in cursor.fetchall()]
                 
-                expected_tables = ['exercises', 'workouts', 'sets']
+                expected_tables = ['exercises', 'workouts', 'sets', 'goals']
                 missing_tables = set(expected_tables) - set(tables)
                 
                 if missing_tables:
@@ -591,12 +688,16 @@ pip install --upgrade matplotlib pandas
                     cursor = conn.execute("SELECT COUNT(*) FROM sets")
                     set_count = cursor.fetchone()[0]
                     
+                    cursor = conn.execute("SELECT COUNT(*) FROM goals")
+                    goal_count = cursor.fetchone()[0]
+                    
                     QMessageBox.information(self, "データベースチェック完了", 
                                           f"✅ データベースは正常です\n\n"
                                           f"📊 データ統計:\n"
                                           f"• 種目数: {exercise_count}\n"
                                           f"• ワークアウト数: {workout_count}\n"
-                                          f"• セット数: {set_count}")
+                                          f"• セット数: {set_count}\n"
+                                          f"• 目標数: {goal_count}")
                     
             self.statusBar().showMessage("✅ データベースチェック完了", 3000)
             
@@ -639,9 +740,10 @@ pip install --upgrade matplotlib pandas
 • 部位別分析
 • 頻度分析
 
-🎯 【目標タブ】（開発中）
+🎯 【目標タブ】
 • 月間目標の設定
 • 進捗追跡
+• 達成率表示
 
 ⚙️ 【設定タブ】（開発中）
 • データ管理
@@ -662,11 +764,13 @@ pip install --upgrade matplotlib pandas
 
 個人向け筋トレ記録・成長追跡デスクトップアプリケーション
 
-📋 主な機能：
-• トレーニング記録管理
-• 成長推移の可視化
-• ベスト記録追跡
-• 統計・分析機能
+📋 実装済み機能：
+• トレーニング記録管理 ✅
+• 履歴表示・フィルタリング ✅  
+• 成長推移の可視化 ✅
+• ベスト記録追跡 ✅
+• 統計・分析機能 ✅
+• 目標管理・進捗追跡 ✅
 
 🛠️ 技術仕様：
 • フロントエンド: PySide6 (Qt)
