@@ -527,6 +527,11 @@ pip install --upgrade matplotlib pandas
         apple_health_import_action = QAction("📱 Appleヘルスからインポート", self)
         apple_health_import_action.triggered.connect(self.import_from_apple_health)
         import_export_menu.addAction(apple_health_import_action)
+
+         # ★ Excel一括インポート（新規追加）
+        excel_import_action = QAction("📊 Excelから一括インポート", self)
+        excel_import_action.triggered.connect(self.import_from_excel)
+        import_export_menu.addAction(excel_import_action)
         
         # 将来の拡張用
         import_export_menu.addSeparator()
@@ -670,6 +675,41 @@ pip install --upgrade matplotlib pandas
             self.logger.error(f"Apple Health import failed: {e}")
             QMessageBox.critical(self, "予期しないエラー", 
                             f"予期しないエラーが発生しました:\n{str(e)}")
+            
+    def import_from_excel(self):
+        """Excelからの一括インポート - 完全版"""
+        try:
+            # pandasの存在確認
+            try:
+                import pandas as pd
+            except ImportError:
+                QMessageBox.critical(self, "ライブラリ不足", 
+                                "📊 Excel一括インポートにはpandasが必要です:\n\n"
+                                "pip install pandas openpyxl\n\n"
+                                "上記コマンドでインストールしてから再試行してください。")
+                return
+            
+            # Excel一括インポートダイアログを表示
+            from ui.excel_import_dialog import ExcelImportDialog
+            
+            dialog = ExcelImportDialog(self.db_manager, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # インポート成功時の処理
+                self.statusBar().showMessage("✅ Excel一括インポートが完了しました", 5000)
+                
+                # 体組成タブを更新
+                if self.body_stats_tab and hasattr(self.body_stats_tab, 'refresh_data'):
+                    self.body_stats_tab.refresh_data()
+                
+                # 体組成タブに切り替え
+                for i in range(self.tab_widget.count()):
+                    if "体組成" in self.tab_widget.tabText(i):
+                        self.tab_widget.setCurrentIndex(i)
+                        break
+                        
+        except Exception as e:
+            self.logger.error(f"Excel import failed: {e}")
+            QMessageBox.critical(self, "予期しないエラー", f"Excel一括インポートでエラー: {str(e)}")        
     
     # 6. refresh_all_data メソッドを以下のように修正
     def refresh_all_data(self):
