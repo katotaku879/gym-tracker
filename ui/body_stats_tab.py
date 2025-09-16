@@ -277,17 +277,12 @@ pip install matplotlib
     def load_body_stats(self):
         """体組成データ読み込み"""
         try:
-            # TODO: データベースから体組成データを取得
-            # サンプルデータ（実装時は削除）
-            sample_data = [
-                BodyStats(1, date(2024, 1, 1), 70.0, 15.0, 55.0),
-                BodyStats(2, date(2024, 1, 8), 69.5, 14.8, 55.2),
-                BodyStats(3, date(2024, 1, 15), 69.0, 14.5, 55.5),
-            ]
+            # 実際のデータベースから取得
+            stats_list = self.db_manager.get_all_body_stats()
             
-            self.stats_table.setRowCount(len(sample_data))
+            self.stats_table.setRowCount(len(stats_list))
             
-            for row, stats in enumerate(sample_data):
+            for row, stats in enumerate(stats_list):
                 # 日付
                 date_item = QTableWidgetItem(str(stats.date))
                 date_item.setFlags(date_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -315,9 +310,9 @@ pip install matplotlib
                 muscle_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.stats_table.setItem(row, 3, muscle_item)
                 
-                # BMI（仮の身長170cmで計算）
+                # BMI（仮の身長185cmで計算）
                 if stats.weight:
-                    bmi = stats.weight / (1.70 ** 2)
+                    bmi = stats.weight / (1.85 ** 2)
                     bmi_text = f"{bmi:.1f}"
                     if bmi < 18.5:
                         bmi_text += " (低体重)"
@@ -343,18 +338,53 @@ pip install matplotlib
     def update_summary(self):
         """サマリー更新"""
         try:
-            # TODO: 実際のデータベースから取得
-            # サンプルデータ
-            self.current_weight_label.setText("⚖️ 体重: 69.0kg")
-            self.current_body_fat_label.setText("📈 体脂肪率: 14.5%")
-            self.current_muscle_label.setText("💪 筋肉量: 55.5kg")
-            self.change_label.setText("📊 前月比: 体重: -1.0kg, 体脂肪率: -0.5%, 筋肉量: +0.5kg")
+            summary = self.db_manager.get_body_stats_summary()
             
+            # 現在の値
+            if summary.get('current_weight'):
+                self.current_weight_label.setText(f"⚖️ 体重: {summary['current_weight']:.1f}kg")
+            else:
+                self.current_weight_label.setText("⚖️ 体重: --")
+            
+            if summary.get('current_body_fat'):
+                self.current_body_fat_label.setText(f"📈 体脂肪率: {summary['current_body_fat']:.1f}%")
+            else:
+                self.current_body_fat_label.setText("📈 体脂肪率: --")
+            
+            if summary.get('current_muscle'):
+                self.current_muscle_label.setText(f"💪 筋肉量: {summary['current_muscle']:.1f}kg")
+            else:
+                self.current_muscle_label.setText("💪 筋肉量: --")
+            
+            # 変化量
+            changes = []
+            if summary.get('weight_change_month') is not None:
+                change = summary['weight_change_month']
+                changes.append(f"体重: {change:+.1f}kg")
+            
+            if summary.get('body_fat_change_month') is not None:
+                change = summary['body_fat_change_month']
+                changes.append(f"体脂肪率: {change:+.1f}%")
+            
+            if summary.get('muscle_change_month') is not None:
+                change = summary['muscle_change_month']
+                changes.append(f"筋肉量: {change:+.1f}kg")
+            
+            if changes:
+                self.change_label.setText(f"📊 前月比: {', '.join(changes)}")
+            else:
+                self.change_label.setText("📊 変化量: --")
+                
         except Exception as e:
             self.logger.error(f"Summary update failed: {e}")
+            # フォールバック表示
+            self.current_weight_label.setText("⚖️ 体重: --")
+            self.current_body_fat_label.setText("📈 体脂肪率: --")
+            self.current_muscle_label.setText("💪 筋肉量: --")
+            self.change_label.setText("📊 変化量: --")
     
     def update_graph(self):
-        """グラフ更新（型安全版）"""
+        """グラフ更新（実DB版）"""
         if not MATPLOTLIB_AVAILABLE:
             return
             
@@ -362,12 +392,12 @@ pip install matplotlib
             graph_type = self.graph_type.currentData()
             period_days = self.period_combo.currentData()
             
-            # サンプルデータ（実装時は実際のデータに置換）
-            stats_list = [
-                BodyStats(1, date(2024, 1, 1), 70.0, 15.0, 55.0),
-                BodyStats(2, date(2024, 1, 8), 69.5, 14.8, 55.2),
-                BodyStats(3, date(2024, 1, 15), 69.0, 14.5, 55.5),
-            ]
+            # 実際のデータベースからデータ取得
+            if period_days > 0:
+                start_date = date.today() - timedelta(days=period_days)
+                stats_list = self.db_manager.get_body_stats_by_date_range(start_date, date.today())
+            else:
+                stats_list = self.db_manager.get_all_body_stats()
             
             if not stats_list:
                 self.figure.clear()
@@ -378,7 +408,10 @@ pip install matplotlib
                 self.canvas.draw()
                 return
             
-            # 日付とデータの準備（型安全）
+            # 日付順にソート
+            stats_list.sort(key=lambda x: x.date if isinstance(x.date, date) else datetime.strptime(x.date, '%Y-%m-%d').date())
+            
+            # 日付をdatetimeオブジェクトに変換
             dates = []
             for stats in stats_list:
                 if isinstance(stats.date, str):
@@ -570,20 +603,99 @@ pip install matplotlib
     
     def add_body_stats(self):
         """体組成データ追加"""
-        # TODO: ダイアログ実装
-        self.show_info("開発中", "体組成データ追加機能は実装中です")
+        from .body_stats_dialog import BodyStatsDialog
+        
+        dialog = BodyStatsDialog(self.db_manager, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            stats_data = dialog.get_body_stats()
+            
+            # 入力値検証
+            if not stats_data.weight:
+                self.show_warning("入力エラー", "体重を入力してください。")
+                return
+            
+            # 同日データの重複チェック
+            existing = self.db_manager.get_body_stats_by_date(stats_data.date)
+            if existing:
+                reply = QMessageBox.question(self, "重複確認", 
+                                           f"{stats_data.date}のデータは既に存在します。\n"
+                                           "上書きしますか？",
+                                           QMessageBox.StandardButton.Yes | 
+                                           QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.Yes:
+                    stats_data.id = existing.id
+                    if self.db_manager.update_body_stats(stats_data):
+                        self.show_info("更新完了", "✅ 体組成データを更新しました！")
+                    else:
+                        self.show_error("更新エラー", "データの更新に失敗しました。")
+                else:
+                    return
+            else:
+                # 新規追加
+                stats_id = self.db_manager.add_body_stats(stats_data)
+                if stats_id:
+                    self.show_info("記録完了", "✅ 体組成データを記録しました！")
+                else:
+                    self.show_error("保存エラー", "データの保存に失敗しました。")
+            
+            self.load_body_stats()
+            self.update_summary()
     
     def edit_selected_stats(self):
         """選択された体組成データを編集"""
-        # TODO: 編集機能実装
-        self.show_info("開発中", "編集機能は実装中です")
+        current_row = self.stats_table.currentRow()
+        if current_row < 0:
+            return
+        
+        date_item = self.stats_table.item(current_row, 0)
+        if not date_item:
+            return
+        
+        stats = date_item.data(Qt.ItemDataRole.UserRole)
+        if not stats:
+            return
+        
+        from .body_stats_dialog import BodyStatsDialog
+        
+        dialog = BodyStatsDialog(self.db_manager, stats, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            updated_stats = dialog.get_body_stats()
+            
+            if self.db_manager.update_body_stats(updated_stats):
+                self.show_info("更新完了", "✅ 体組成データを更新しました！")
+                self.load_body_stats()
+                self.update_summary()
+            else:
+                self.show_error("更新エラー", "データの更新に失敗しました。")
     
     def delete_selected_stats(self):
         """選択された体組成データを削除"""
-        # TODO: 削除機能実装
-        reply = QMessageBox.question(self, "削除確認", "選択したデータを削除しますか？")
+        current_row = self.stats_table.currentRow()
+        if current_row < 0:
+            return
+        
+        date_item = self.stats_table.item(current_row, 0)
+        if not date_item:
+            return
+        
+        stats = date_item.data(Qt.ItemDataRole.UserRole)
+        if not stats:
+            return
+        
+        reply = QMessageBox.question(self, "🗑️ 削除確認",
+                                   f"{stats.date}の体組成データを削除しますか？\n\n"
+                                   f"⚠️ この操作は取り消せません。",
+                                   QMessageBox.StandardButton.Yes | 
+                                   QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        
         if reply == QMessageBox.StandardButton.Yes:
-            self.show_info("開発中", "削除機能は実装中です")
+            if self.db_manager.delete_body_stats(stats.id):
+                self.show_info("削除完了", "🗑️ 体組成データを削除しました。")
+                self.load_body_stats()
+                self.update_summary()
+            else:
+                self.show_error("削除エラー", "データの削除に失敗しました。")
     
     def update_button_states(self):
         """ボタン状態更新"""

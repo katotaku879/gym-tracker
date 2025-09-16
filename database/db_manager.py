@@ -1073,175 +1073,45 @@ class DatabaseManager:
     # 体組成管理機能
     # ===========================================
     
+    # database/db_manager.py に追加するメソッド
+
     def add_body_stats(self, body_stats: BodyStats) -> Optional[int]:
         """体組成データ追加"""
         try:
             with self.safe_transaction() as conn:
                 cursor = conn.execute(
-                    """INSERT INTO body_stats 
-                       (date, weight, body_fat_percentage, muscle_mass)
-                       VALUES (?, ?, ?, ?)""",
+                    """INSERT INTO body_stats (date, weight, body_fat_percentage, muscle_mass)
+                    VALUES (?, ?, ?, ?)""",
                     (body_stats.date, body_stats.weight, 
-                     body_stats.body_fat_percentage, body_stats.muscle_mass)
+                    body_stats.body_fat_percentage, body_stats.muscle_mass)
                 )
-                stats_id = cursor.lastrowid
-                self.logger.info(f"Body stats added successfully: ID {stats_id}")
-                return stats_id
+                body_stats_id = cursor.lastrowid
+                self.logger.info(f"Body stats added: ID {body_stats_id}")
+                return body_stats_id
         except Exception as e:
             self.logger.error(f"Failed to add body stats: {e}")
             return None
-    
+
     def get_all_body_stats(self) -> List[BodyStats]:
         """全体組成データ取得"""
         try:
             with self.get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT id, date, weight, body_fat_percentage, muscle_mass
-                    FROM body_stats
-                    ORDER BY date DESC
-                """)
+                cursor = conn.execute(
+                    "SELECT id, date, weight, body_fat_percentage, muscle_mass FROM body_stats ORDER BY date DESC"
+                )
                 return [BodyStats(*row) for row in cursor.fetchall()]
         except Exception as e:
             self.logger.error(f"Failed to get body stats: {e}")
             return []
-    
-    def get_body_stats_by_date_range(self, start_date: date, end_date: date) -> List[BodyStats]:
-        """期間指定で体組成データ取得"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT id, date, weight, body_fat_percentage, muscle_mass
-                    FROM body_stats
-                    WHERE date BETWEEN ? AND ?
-                    ORDER BY date ASC
-                """, (start_date, end_date))
-                return [BodyStats(*row) for row in cursor.fetchall()]
-        except Exception as e:
-            self.logger.error(f"Failed to get body stats by date range: {e}")
-            return []
-    
-    def get_latest_body_stats(self) -> Optional[BodyStats]:
-        """最新の体組成データ取得"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT id, date, weight, body_fat_percentage, muscle_mass
-                    FROM body_stats
-                    ORDER BY date DESC, id DESC
-                    LIMIT 1
-                """)
-                row = cursor.fetchone()
-                if row:
-                    return BodyStats(*row)
-                return None
-        except Exception as e:
-            self.logger.error(f"Failed to get latest body stats: {e}")
-            return None
-    
-    def update_body_stats(self, body_stats: BodyStats) -> bool:
-        """体組成データ更新"""
-        try:
-            with self.safe_transaction() as conn:
-                cursor = conn.execute(
-                    """UPDATE body_stats 
-                       SET date = ?, weight = ?, body_fat_percentage = ?, muscle_mass = ?
-                       WHERE id = ?""",
-                    (body_stats.date, body_stats.weight, 
-                     body_stats.body_fat_percentage, body_stats.muscle_mass, body_stats.id)
-                )
-                
-                if cursor.rowcount > 0:
-                    self.logger.info(f"Body stats updated successfully: ID {body_stats.id}")
-                    return True
-                else:
-                    self.logger.warning(f"Body stats not found for update: ID {body_stats.id}")
-                    return False
-        except Exception as e:
-            self.logger.error(f"Failed to update body stats: {e}")
-            return False
-    
-    def delete_body_stats(self, stats_id: int) -> bool:
-        """体組成データ削除"""
-        try:
-            with self.safe_transaction() as conn:
-                cursor = conn.execute("DELETE FROM body_stats WHERE id = ?", (stats_id,))
-                
-                if cursor.rowcount > 0:
-                    self.logger.info(f"Body stats deleted successfully: ID {stats_id}")
-                    return True
-                else:
-                    self.logger.warning(f"Body stats not found for deletion: ID {stats_id}")
-                    return False
-        except Exception as e:
-            self.logger.error(f"Failed to delete body stats: {e}")
-            return False
-    
-    def get_body_stats_summary(self) -> Dict[str, Optional[float]]:
-        """体組成統計サマリー取得"""
-        try:
-            with self.get_connection() as conn:
-                # 最新のデータ
-                latest = self.get_latest_body_stats()
-                
-                # 1ヶ月前のデータ（最も近い日付）
-                cursor = conn.execute("""
-                    SELECT weight, body_fat_percentage, muscle_mass
-                    FROM body_stats
-                    WHERE date <= date('now', '-30 days')
-                    ORDER BY date DESC
-                    LIMIT 1
-                """)
-                month_ago = cursor.fetchone()
-                
-                # 平均値計算（過去3ヶ月）
-                cursor = conn.execute("""
-                    SELECT AVG(weight), AVG(body_fat_percentage), AVG(muscle_mass)
-                    FROM body_stats
-                    WHERE date >= date('now', '-90 days')
-                """)
-                avg_data = cursor.fetchone()
-                
-                summary = {}
-                
-                if latest:
-                    summary.update({
-                        'current_weight': latest.weight,
-                        'current_body_fat': latest.body_fat_percentage,
-                        'current_muscle': latest.muscle_mass,
-                        'last_recorded_date': latest.date
-                    })
-                
-                if month_ago:
-                    if latest and latest.weight and month_ago[0]:
-                        summary['weight_change_month'] = latest.weight - month_ago[0]
-                    if latest and latest.body_fat_percentage and month_ago[1]:
-                        summary['body_fat_change_month'] = latest.body_fat_percentage - month_ago[1]
-                    if latest and latest.muscle_mass and month_ago[2]:
-                        summary['muscle_change_month'] = latest.muscle_mass - month_ago[2]
-                
-                if avg_data and any(avg_data):
-                    summary.update({
-                        'avg_weight_3months': avg_data[0],
-                        'avg_body_fat_3months': avg_data[1],
-                        'avg_muscle_3months': avg_data[2]
-                    })
-                
-                return summary
-        except Exception as e:
-            self.logger.error(f"Failed to get body stats summary: {e}")
-            return {}
-    
+
     def get_body_stats_by_date(self, target_date: date) -> Optional[BodyStats]:
-        """指定日の体組成データ取得"""
+        """日付で体組成データ取得"""
         try:
             with self.get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT id, date, weight, body_fat_percentage, muscle_mass
-                    FROM body_stats
-                    WHERE date = ?
-                    ORDER BY id DESC
-                    LIMIT 1
-                """, (target_date,))
+                cursor = conn.execute(
+                    "SELECT id, date, weight, body_fat_percentage, muscle_mass FROM body_stats WHERE date = ?",
+                    (target_date,)
+                )
                 row = cursor.fetchone()
                 if row:
                     return BodyStats(*row)
@@ -1249,6 +1119,87 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Failed to get body stats by date: {e}")
             return None
+
+    def update_body_stats(self, body_stats: BodyStats) -> bool:
+        """体組成データ更新"""
+        try:
+            with self.safe_transaction() as conn:
+                conn.execute(
+                    """UPDATE body_stats 
+                    SET date = ?, weight = ?, body_fat_percentage = ?, muscle_mass = ?
+                    WHERE id = ?""",
+                    (body_stats.date, body_stats.weight, 
+                    body_stats.body_fat_percentage, body_stats.muscle_mass, body_stats.id)
+                )
+                self.logger.info(f"Body stats updated: ID {body_stats.id}")
+                return True
+        except Exception as e:
+            self.logger.error(f"Failed to update body stats: {e}")
+            return False
+
+    def delete_body_stats(self, body_stats_id: int) -> bool:
+        """体組成データ削除"""
+        try:
+            with self.safe_transaction() as conn:
+                conn.execute("DELETE FROM body_stats WHERE id = ?", (body_stats_id,))
+                self.logger.info(f"Body stats deleted: ID {body_stats_id}")
+                return True
+        except Exception as e:
+            self.logger.error(f"Failed to delete body stats: {e}")
+            return False
+
+    def get_body_stats_by_date_range(self, start_date: date, end_date: date) -> List[BodyStats]:
+        """期間指定で体組成データ取得"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(
+                    """SELECT id, date, weight, body_fat_percentage, muscle_mass 
+                    FROM body_stats 
+                    WHERE date >= ? AND date <= ?
+                    ORDER BY date""",
+                    (start_date, end_date)
+                )
+                return [BodyStats(*row) for row in cursor.fetchall()]
+        except Exception as e:
+            self.logger.error(f"Failed to get body stats by date range: {e}")
+            return []
+
+    def get_body_stats_summary(self) -> Dict[str, float]:
+        """体組成サマリー取得"""
+        try:
+            with self.get_connection() as conn:
+                # 最新データ
+                cursor = conn.execute(
+                    """SELECT weight, body_fat_percentage, muscle_mass 
+                    FROM body_stats 
+                    ORDER BY date DESC LIMIT 1"""
+                )
+                latest = cursor.fetchone()
+                
+                # 1ヶ月前データ
+                cursor = conn.execute(
+                    """SELECT weight, body_fat_percentage, muscle_mass 
+                    FROM body_stats 
+                    WHERE date <= date('now', '-1 month')
+                    ORDER BY date DESC LIMIT 1"""
+                )
+                month_ago = cursor.fetchone()
+                
+                summary = {}
+                if latest:
+                    summary['current_weight'] = latest[0]
+                    summary['current_body_fat'] = latest[1]
+                    summary['current_muscle'] = latest[2]
+                    
+                    if month_ago:
+                        summary['weight_change_month'] = (latest[0] or 0) - (month_ago[0] or 0)
+                        summary['body_fat_change_month'] = (latest[1] or 0) - (month_ago[1] or 0)
+                        summary['muscle_change_month'] = (latest[2] or 0) - (month_ago[2] or 0)
+                
+                return summary
+        except Exception as e:
+            self.logger.error(f"Failed to get body stats summary: {e}")
+            return {}
 
 # database/models.py のGoalクラスも拡張
         @dataclass
