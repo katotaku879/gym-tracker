@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.dates as mdates
+import matplotlib.cm as cm
 from datetime import datetime, timedelta, date
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
@@ -651,7 +652,7 @@ class StatsTab(BaseTab):
         volumes = [daily_volume[d] for d in dates]
         
         if dates:
-            colors = plt.cm.viridis(np.linspace(0, 1, len(volumes)))
+            colors = cm.viridis(np.linspace(0, 1, len(volumes)))  # type: ignore
             bars = ax.bar(dates, volumes, width=1, alpha=0.8, color=colors)
             
             ax.set_title('📊 トレーニングボリューム推移', fontsize=16, fontweight='bold', color='#2c3e50')
