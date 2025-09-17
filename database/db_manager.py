@@ -1200,6 +1200,245 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"Failed to get body stats summary: {e}")
             return {}
+        
+    # database/db_manager.py に追加するメソッド群
+
+# 既存のDatabaseManagerクラスに以下のメソッドを追加してください
+
+def get_body_stats_optimized(self) -> List[BodyStats]:
+    """体組成データ取得（最適化版）"""
+    try:
+        with self.get_connection() as conn:
+            # インデックスを活用した高速クエリ
+            cursor = conn.execute("""
+                SELECT id, date, weight, body_fat_percentage, muscle_mass 
+                FROM body_stats 
+                ORDER BY date DESC
+                LIMIT 1000
+            """)
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append(BodyStats(
+                    id=row[0],
+                    date=row[1],  # SQLiteから直接date型で取得
+                    weight=row[2],
+                    body_fat_percentage=row[3],
+                    muscle_mass=row[4]
+                ))
+            
+            return results
+            
+    except Exception as e:
+        self.logger.error(f"Optimized body stats fetch failed: {e}")
+        return []
+
+    def get_body_stats_summary_optimized(self) -> Dict[str, float]:
+        """体組成サマリー取得（最適化版）"""
+        try:
+            with self.get_connection() as conn:
+                summary = {}
+                
+                # 単一のクエリで最新データと前月データを取得
+                cursor = conn.execute("""
+                    WITH latest_data AS (
+                        SELECT weight, body_fat_percentage, muscle_mass, date
+                        FROM body_stats 
+                        ORDER BY date DESC 
+                        LIMIT 1
+                    ),
+                    month_ago_data AS (
+                        SELECT weight, body_fat_percentage, muscle_mass
+                        FROM body_stats 
+                        WHERE date <= date('now', '-1 month')
+                        ORDER BY date DESC
+                        LIMIT 1
+                    )
+                    SELECT 
+                        l.weight as current_weight,
+                        l.body_fat_percentage as current_body_fat,
+                        l.muscle_mass as current_muscle,
+                        m.weight as month_ago_weight,
+                        m.body_fat_percentage as month_ago_body_fat,
+                        m.muscle_mass as month_ago_muscle
+                    FROM latest_data l
+                    LEFT JOIN month_ago_data m ON 1=1
+                """)
+                
+                row = cursor.fetchone()
+                if row:
+                    # 現在の値
+                    if row[0] is not None:
+                        summary['current_weight'] = float(row[0])
+                    if row[1] is not None:
+                        summary['current_body_fat'] = float(row[1])
+                    if row[2] is not None:
+                        summary['current_muscle'] = float(row[2])
+                    
+                    # 変化量計算
+                    if row[0] is not None and row[3] is not None:
+                        summary['weight_change_month'] = float(row[0]) - float(row[3])
+                    if row[1] is not None and row[4] is not None:
+                        summary['body_fat_change_month'] = float(row[1]) - float(row[4])
+                    if row[2] is not None and row[5] is not None:
+                        summary['muscle_change_month'] = float(row[2]) - float(row[5])
+                
+                return summary
+                
+        except Exception as e:
+            self.logger.error(f"Optimized summary fetch failed: {e}")
+            return {}
+
+    def get_body_stats_by_date_range_optimized(self, start_date: date, end_date: date) -> List[BodyStats]:
+        """期間指定で体組成データ取得（最適化版）"""
+        try:
+            with self.get_connection() as conn:
+                # パラメータ化クエリ + インデックス活用
+                cursor = conn.execute("""
+                    SELECT id, date, weight, body_fat_percentage, muscle_mass 
+                    FROM body_stats 
+                    WHERE date >= ? AND date <= ?
+                    ORDER BY date DESC
+                """, (start_date, end_date))
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append(BodyStats(
+                        id=row[0],
+                        date=row[1],
+                        weight=row[2],
+                        body_fat_percentage=row[3],
+                        muscle_mass=row[4]
+                    ))
+                
+                return results
+                
+        except Exception as e:
+            self.logger.error(f"Optimized date range fetch failed: {e}")
+            return []
+
+    def get_latest_body_stats(self, limit: int = 10) -> List[BodyStats]:
+        """最新の体組成データ取得（高速版）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, date, weight, body_fat_percentage, muscle_mass 
+                    FROM body_stats 
+                    ORDER BY date DESC
+                    LIMIT ?
+                """, (limit,))
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append(BodyStats(
+                        id=row[0],
+                        date=row[1],
+                        weight=row[2],
+                        body_fat_percentage=row[3],
+                        muscle_mass=row[4]
+                    ))
+                
+                return results
+                
+        except Exception as e:
+            self.logger.error(f"Latest body stats fetch failed: {e}")
+            return []
+
+    def ensure_body_stats_indexes(self):
+        """体組成データ用インデックス作成"""
+        try:
+            with self.safe_transaction() as conn:
+                # 日付インデックス（降順）
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_body_stats_date_desc 
+                    ON body_stats(date DESC)
+                """)
+                
+                # 複合インデックス（日付＋重量）
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_body_stats_date_weight 
+                    ON body_stats(date DESC, weight)
+                """)
+                
+                self.logger.info("Body stats indexes ensured")
+                
+        except Exception as e:
+            self.logger.error(f"Index creation failed: {e}")
+
+    def optimize_database(self):
+        """データベース最適化"""
+        try:
+            with self.safe_transaction() as conn:
+                # VACUUM（データベース最適化）
+                conn.execute("VACUUM")
+                
+                # ANALYZE（統計情報更新）
+                conn.execute("ANALYZE")
+                
+                # 体組成テーブルのインデックス確保
+                self.ensure_body_stats_indexes()
+                
+                self.logger.info("Database optimization completed")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Database optimization failed: {e}")
+            return False
+
+    def get_body_stats_count(self) -> int:
+        """体組成データ件数取得（高速版）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("SELECT COUNT(*) FROM body_stats")
+                return cursor.fetchone()[0]
+        except Exception as e:
+            self.logger.error(f"Body stats count failed: {e}")
+            return 0
+
+    # 既存メソッドの最適化版への置き換え（オプション）
+    def get_all_body_stats_fast(self) -> List[BodyStats]:
+        """全体組成データ取得（高速版）- 既存メソッドの代替"""
+        return self.get_body_stats_optimized()
+
+    def get_body_stats_summary_fast(self) -> Dict[str, float]:
+        """体組成サマリー取得（高速版）- 既存メソッドの代替"""
+        return self.get_body_stats_summary_optimized()
+
+    # init_database メソッドに追加するコード（既存のinit_database内に追加）
+    def init_database_body_stats_optimization(self):
+        """init_database メソッド内に追加するコード"""
+        
+        # body_statsテーブル作成（既存コードの後に追加）
+        with self.safe_transaction() as conn:
+            # パフォーマンス最適化のための設定
+            conn.execute("PRAGMA journal_mode = WAL")  # Write-Ahead Logging
+            conn.execute("PRAGMA synchronous = NORMAL")  # 高速化
+            conn.execute("PRAGMA cache_size = 10000")   # キャッシュサイズ増加
+            conn.execute("PRAGMA temp_store = MEMORY")  # 一時データをメモリに
+            
+            # インデックス作成
+            self.ensure_body_stats_indexes()
+
+    # 使用例とテスト
+    def test_optimized_methods(self):
+        """最適化メソッドのテスト"""
+        try:
+            # データ取得テスト
+            stats = self.get_body_stats_optimized()
+            print(f"取得データ数: {len(stats)}")
+            
+            # サマリーテスト
+            summary = self.get_body_stats_summary_optimized()
+            print(f"サマリー: {summary}")
+            
+            # データベース最適化テスト
+            result = self.optimize_database()
+            print(f"最適化結果: {result}")
+            
+            return True
+        except Exception as e:
+            print(f"テスト失敗: {e}")
+            return False    
 
 # database/models.py のGoalクラスも拡張
         @dataclass
