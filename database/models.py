@@ -36,13 +36,55 @@ class Set:
 
 @dataclass
 class Goal:
-    """目標モデル"""
+    """3セット方式の目標クラス"""
     id: Optional[int]
     exercise_id: int
-    target_weight: float
-    current_weight: float
-    target_month: str  # YYYY-MM
-    achieved: bool = False
+    
+    # 3セット方式の目標設定
+    target_weight: float        # 目標重量（kg）
+    target_reps: int           # 目標回数
+    target_sets: int           # 目標セット数
+    
+    # 進捗追跡
+    current_achieved_sets: int  # 現在達成できているセット数
+    current_max_weight: float   # 現在の最高重量（参考値）
+    
+    # メタデータ
+    target_month: str          # 目標月（YYYY-MM）
+    achieved: bool             # 達成済みフラグ
+    notes: Optional[str] = None # メモ
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    
+    # ❌ 削除：古い1RM基準のフィールド
+    # current_weight: float  # 削除
+    
+    def progress_percentage(self) -> int:
+        """進捗率計算（セット達成ベース）"""
+        if self.target_sets == 0:
+            return 0
+        return min(int((self.current_achieved_sets / self.target_sets) * 100), 100)
+    
+    def is_achieved(self) -> bool:
+        """目標達成判定"""
+        return self.current_achieved_sets >= self.target_sets or self.achieved
+    
+    def achievement_text(self) -> str:
+        """達成状況テキスト"""
+        if self.is_achieved():
+            return "🎉 目標達成！"
+        elif self.current_achieved_sets > 0:
+            return f"💪 {self.current_achieved_sets}/{self.target_sets}セット達成"
+        else:
+            return "📈 挑戦中"
+    
+    def target_description(self) -> str:
+        """目標説明テキスト"""
+        return f"{self.target_weight}kg × {self.target_reps}回 × {self.target_sets}セット"
+    
+    def remaining_sets(self) -> int:
+        """残りセット数"""
+        return max(0, self.target_sets - self.current_achieved_sets)
 
 @dataclass
 class BodyStats:

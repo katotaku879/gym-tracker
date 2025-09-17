@@ -16,6 +16,7 @@ from .record_tab import RecordTab
 from .history_tab import HistoryTab
 from .body_stats_tab import BodyStatsTab
 from .body_composition_goals_tab import BodyCompositionGoalsTab
+from ui.goals_tab_v2 import GoalsTabV2
 
 
 
@@ -27,13 +28,7 @@ except ImportError as e:
     STATS_TAB_AVAILABLE = False
     print(f"Stats tab import failed: {e}")
 
-# 目標タブをインポート
-try:
-    from .goals_tab import GoalsTab
-    GOALS_TAB_AVAILABLE = True
-except ImportError as e:
-    GOALS_TAB_AVAILABLE = False
-    print(f"Goals tab import failed: {e}")
+
 
 # 型定義用のプロトコル
 class RefreshableTab(Protocol):
@@ -57,7 +52,7 @@ class MainWindow(QMainWindow):
         self.record_tab: Optional[RecordTab] = None
         self.history_tab: Optional[HistoryTab] = None
         self.stats_tab: Optional[Union['StatsTab', QWidget]] = None
-        self.goals_tab: Optional[Union['GoalsTab', QWidget]] = None
+        self.goals_tab: Optional[Union['GoalsTabV2', QWidget]] = None
         self.settings_tab: Optional[QWidget] = None
         self.body_stats_tab: Optional[BodyStatsTab] = None
         
@@ -199,26 +194,10 @@ class MainWindow(QMainWindow):
                 self.tab_widget.addTab(self.stats_tab, "📊 統計（要インストール）")
                 self.logger.warning("Stats tab not available - using placeholder")
             
-            # 目標タブ（完全実装版）
-            if GOALS_TAB_AVAILABLE:
-                try:
-                    self.logger.info("Setting up Goals tab...")
-                    self.goals_tab = GoalsTab(self.db_manager)
-                    self.tab_widget.addTab(self.goals_tab, "🎯 目標")
-                    self.logger.info("Goals tab loaded successfully")
-                except Exception as e:
-                    self.logger.error(f"Goals tab creation failed: {e}")
-                    # フォールバック：プレースホルダー
-                    self.goals_tab = self.create_goals_placeholder()
-                    self.tab_widget.addTab(self.goals_tab, "🎯 目標（エラー）")
-                    QMessageBox.warning(self, "目標タブエラー", 
-                                      f"目標タブの作成に失敗しました:\n{str(e)}\n\n"
-                                      "プレースホルダーが表示されます。")
-            else:
-                # フォールバック：プレースホルダー
-                self.goals_tab = self.create_goals_placeholder()
-                self.tab_widget.addTab(self.goals_tab, "🎯 目標（実装中）")
-                self.logger.warning("Goals tab not available - using placeholder")
+            # 🎯 3セット方式の目標タブ（完全置換）
+            from ui.goals_tab_v2 import GoalsTabV2
+            self.goals_tab = GoalsTabV2(self.db_manager)
+            self.tab_widget.addTab(self.goals_tab, "🎯 目標")
 
             # 💊 体組成タブ（新規追加）
             self.logger.info("Setting up Body Stats tab...")
@@ -327,67 +306,7 @@ pip install --upgrade matplotlib pandas
         layout.addStretch()
         
         return placeholder
-    
-    def create_goals_placeholder(self) -> QWidget:
-        """目標タブプレースホルダー作成"""
-        placeholder = QWidget()
-        layout = QVBoxLayout(placeholder)
         
-        title = QLabel("🎯 目標管理機能")
-        title.setFont(QFont("", 16, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: #f39c12; margin: 20px;")
-        layout.addWidget(title)
-        
-        if not GOALS_TAB_AVAILABLE:
-            message = QLabel("""
-目標管理機能の読み込みに失敗しました 🚧
-
-📋 予定されている機能：
-• 月間目標設定
-• 進捗追跡
-• 達成率表示
-• 目標達成通知
-• 目標履歴管理
-
-🔧 トラブルシューティング：
-• goals_tab.py ファイルが存在するか確認
-• アプリケーションを再起動
-• エラーログを確認
-
-🔜 実装完了後に利用可能になります！
-            """)
-        else:
-            message = QLabel("""
-目標管理機能は開発中です 🚧
-
-📋 予定されている機能：
-• 月間目標設定
-• 進捗追跡
-• 達成率表示
-• 目標達成通知
-• 目標履歴管理
-
-🔜 近日公開予定です！
-            """)
-        
-        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        message.setStyleSheet("""
-            QLabel {
-                color: #7f8c8d;
-                background-color: #fff3cd;
-                padding: 20px;
-                border-radius: 8px;
-                border: 2px dashed #f39c12;
-                margin: 20px;
-                line-height: 1.5;
-            }
-        """)
-        layout.addWidget(message)
-        layout.addStretch()
-        
-        return placeholder
-    
     def create_settings_placeholder(self) -> QWidget:
         """設定タブプレースホルダー作成"""
         placeholder = QWidget()
@@ -501,15 +420,6 @@ pip install --upgrade matplotlib pandas
                     try:
                         self.call_refresh_data(self.goals_tab)
                         
-                        # 目標の進捗を最新のトレーニング記録から自動更新
-                        if hasattr(self.db_manager, 'update_goal_progress_from_recent_records'):
-                            updated_count = self.db_manager.update_goal_progress_from_recent_records()
-                            if updated_count > 0:
-                                self.statusBar().showMessage(f"目標データを更新しました（進捗更新: {updated_count}件）", 3000)
-                            else:
-                                self.statusBar().showMessage("目標データを更新しました", 2000)
-                        else:
-                            self.statusBar().showMessage("目標データを更新しました", 2000)
                     except Exception as e:
                         self.logger.warning(f"Goals tab refresh failed: {e}")
 
@@ -526,6 +436,13 @@ pip install --upgrade matplotlib pandas
 
         # データインポート・エクスポート サブメニュー
         import_export_menu = file_menu.addMenu("📥📤 データ移行")
+
+        # 🏋️‍♂️ CSVワークアウトインポート（新規追加）
+        csv_workout_import_action = QAction("🏋️‍♂️ CSVワークアウトデータインポート", self)
+        csv_workout_import_action.triggered.connect(self.import_csv_workout_data)
+        import_export_menu.addAction(csv_workout_import_action)
+        
+        import_export_menu.addSeparator()
         
         # Appleヘルスからインポート
         apple_health_import_action = QAction("📱 Appleヘルスからインポート", self)
@@ -536,12 +453,6 @@ pip install --upgrade matplotlib pandas
         excel_import_action = QAction("📊 Excelから一括インポート", self)
         excel_import_action.triggered.connect(self.import_from_excel)
         import_export_menu.addAction(excel_import_action)
-        
-        # 将来の拡張用
-        import_export_menu.addSeparator()
-        csv_import_action = QAction("📄 CSVからインポート（準備中）", self)
-        csv_import_action.setEnabled(False)
-        import_export_menu.addAction(csv_import_action)
         
         # データ更新アクション
         refresh_action = QAction("🔄 データ更新", self)
@@ -713,49 +624,75 @@ pip install --upgrade matplotlib pandas
                         
         except Exception as e:
             self.logger.error(f"Excel import failed: {e}")
-            QMessageBox.critical(self, "予期しないエラー", f"Excel一括インポートでエラー: {str(e)}")        
+            QMessageBox.critical(self, "予期しないエラー", f"Excel一括インポートでエラー: {str(e)}")   
+
+    # ui/main_window.py の MainWindow クラス内に追加
+
+    def import_csv_workout_data(self):
+        """CSVワークアウトデータインポート"""
+        try:
+            from ui.csv_import_dialog import CSVImportDialog
+            
+            dialog = CSVImportDialog(self.db_manager, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # インポート成功時の処理
+                self.refresh_all_data()  # 既存のメソッドを呼び出し
+                self.statusBar().showMessage("CSVワークアウトデータのインポートが完了しました", 5000)
+                
+                # 成功メッセージ
+                QMessageBox.information(
+                    self, "インポート完了",
+                    "🎉 CSVワークアウトデータのインポートが正常に完了しました！\n\n"
+                    "📊 統計タブでデータを確認してください。\n"
+                    "🎯 目標タブで進捗を更新できます。"
+                )
+                
+        except ImportError as e:
+            self.logger.error(f"CSVインポートモジュール読み込みエラー: {e}")
+            QMessageBox.critical(
+                self, "モジュールエラー",
+                "CSVインポート機能の読み込みに失敗しました。\n"
+                "必要なモジュールがインストールされているか確認してください。"
+            )
+        except Exception as e:
+            self.logger.error(f"CSVインポートエラー: {e}")
+            QMessageBox.critical(
+                self, "インポートエラー",
+                f"CSVインポート中にエラーが発生しました:\n{e}"
+            )             
     
     # 6. refresh_all_data メソッドを以下のように修正
     def refresh_all_data(self):
-        """全データ更新 - 体組成タブ対応版"""
+        """全データ更新（3セット方式対応）"""
         try:
             self.statusBar().showMessage("データを更新中...", 1000)
             
-            # 各タブのデータを更新（型安全な呼び出し）
             refresh_count = 0
             
+            # 各タブのデータ更新
             if self.call_refresh_data(self.history_tab):
                 refresh_count += 1
             
             if self.call_refresh_data(self.stats_tab):
                 refresh_count += 1
             
-            # 記録タブには複数の可能性があるメソッド名
             if not self.call_refresh_data(self.record_tab):
                 if self.call_load_exercises(self.record_tab):
                     refresh_count += 1
             else:
                 refresh_count += 1
             
-            # 目標タブのデータ更新（既存のまま）
+            # 🎯 3セット方式の目標タブ更新
             if self.call_refresh_data(self.goals_tab):
                 refresh_count += 1
-                    
-                # 目標進捗の自動更新
-                try:
-                    if hasattr(self.db_manager, 'update_goal_progress_from_recent_records'):
-                        updated_goals = self.db_manager.update_goal_progress_from_recent_records()
-                        if updated_goals > 0:
-                            self.logger.info(f"Auto-updated {updated_goals} goals from recent records")
-                except Exception as e:
-                    self.logger.warning(f"Goal progress auto-update failed: {e}")
             
-            # 💊 体組成タブの更新を追加
+            # 💊 体組成タブの更新
             if self.call_refresh_data(self.body_stats_tab):
                 refresh_count += 1
             
+            # ❌ 削除済み: 1RM基準の自動更新
+            
             self.statusBar().showMessage(f"✅ {refresh_count}個のタブのデータを更新しました", 3000)
-            QMessageBox.information(self, "更新完了", f"📊 {refresh_count}個のタブを更新しました！")
             
         except Exception as e:
             self.logger.error(f"Data refresh failed: {e}")
@@ -978,3 +915,4 @@ pip install --upgrade matplotlib pandas
             self.logger.error(f"Close event failed: {e}")
             # エラーが発生しても終了は許可
             event.accept()
+
