@@ -15,6 +15,7 @@ from utils.constants import (WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
 from .record_tab import RecordTab
 from .history_tab import HistoryTab
 from .body_stats_tab import BodyStatsTab
+from .body_composition_goals_tab import BodyCompositionGoalsTab
 
 
 
@@ -222,7 +223,10 @@ class MainWindow(QMainWindow):
             # 💊 体組成タブ（新規追加）
             self.logger.info("Setting up Body Stats tab...")
             self.body_stats_tab = BodyStatsTab(self.db_manager)
-            self.tab_widget.addTab(self.body_stats_tab, "📊 体組成")    
+            self.tab_widget.addTab(self.body_stats_tab, "📊 体組成") 
+
+            self.body_goals_tab = BodyCompositionGoalsTab(self.db_manager)
+            self.tab_widget.addTab(self.body_goals_tab, "🎯 体組成目標")   
             
             # 設定タブ（プレースホルダー）
             self.settings_tab = self.create_settings_placeholder()

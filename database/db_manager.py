@@ -1,16 +1,23 @@
-# database/db_manager.py
 import sqlite3
 import logging
 from contextlib import contextmanager
 from datetime import date, datetime
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any  # ← Any を追加
 import shutil
 import os
 
-from .models import Exercise, Workout, Set, Goal, BodyStats
+# 既存のインポート
+from .models import Exercise, Workout, Set, Goal, BodyStats, BodyCompositionGoal  # ← BodyCompositionGoal を追加
 from utils.constants import DB_FILE
 from utils.calculations import calculate_one_rm
-from typing import List, Dict, Optional, Tuple
+
+# 型エイリアス（型ヒント用）
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .models import BodyCompositionGoal as BodyCompositionGoalType
+else:
+    BodyCompositionGoalType = 'BodyCompositionGoal'
+
 
 class DatabaseManager:
     def __init__(self, db_file: str = DB_FILE):
@@ -52,128 +59,137 @@ class DatabaseManager:
                 conn.close()
 
     def init_database(self):
-        """データベース初期化"""
-        with self.safe_transaction() as conn:
-            # exercisesテーブル作成
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS exercises (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    variation TEXT NOT NULL,
-                    category TEXT NOT NULL
-                )
-            """)
+        """データベース初期化（修正版）"""
+        try:
+            with self.safe_transaction() as conn:
+                # exercisesテーブル作成
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS exercises (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        variation TEXT NOT NULL,
+                        category TEXT NOT NULL
+                    )
+                """)
 
-            # workoutsテーブル作成
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS workouts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date DATE NOT NULL,
-                    notes TEXT
-                )
-            """)
+                # workoutsテーブル作成
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS workouts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date DATE NOT NULL,
+                        notes TEXT
+                    )
+                """)
 
-            # setsテーブル作成
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS sets (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    workout_id INTEGER,
-                    exercise_id INTEGER,
-                    set_number INTEGER,
-                    weight REAL NOT NULL,
-                    reps INTEGER NOT NULL,
-                    one_rm REAL,
-                    FOREIGN KEY (workout_id) REFERENCES workouts(id),
-                    FOREIGN KEY (exercise_id) REFERENCES exercises(id)
-                )
-            """)
+                # setsテーブル作成
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS sets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        workout_id INTEGER,
+                        exercise_id INTEGER,
+                        set_number INTEGER,
+                        weight REAL NOT NULL,
+                        reps INTEGER NOT NULL,
+                        one_rm REAL,
+                        FOREIGN KEY (workout_id) REFERENCES workouts(id),
+                        FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+                    )
+                """)
 
-            # goalsテーブル作成
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS goals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    exercise_id INTEGER,
-                    target_weight REAL,
-                    current_weight REAL,
-                    target_month TEXT,
-                    achieved BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (exercise_id) REFERENCES exercises(id)
-                )
-            """)
+                # goalsテーブル作成
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS goals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        exercise_id INTEGER,
+                        target_weight REAL,
+                        current_weight REAL,
+                        target_month TEXT,
+                        achieved BOOLEAN DEFAULT FALSE,
+                        FOREIGN KEY (exercise_id) REFERENCES exercises(id)
+                    )
+                """)
 
-            # body_statsテーブル作成
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS body_stats (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date DATE NOT NULL,
-                    weight REAL,
-                    body_fat_percentage REAL,
-                    muscle_mass REAL
-                )
-            """)
+                # body_statsテーブル作成
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS body_stats (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date DATE NOT NULL,
+                        weight REAL,
+                        body_fat_percentage REAL,
+                        muscle_mass REAL
+                    )
+                """)
 
-            # インデックス作成
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_sets_workout_id ON sets(workout_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_sets_exercise_id ON sets(exercise_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_workouts_date ON workouts(date)")
+                # インデックス作成
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_sets_workout_id ON sets(workout_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_sets_exercise_id ON sets(exercise_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_workouts_date ON workouts(date)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_body_stats_date ON body_stats(date)")
 
-            # 初期データ挿入
-            self._insert_initial_exercises(conn)
+                # 初期データ挿入（同じトランザクション内で実行）
+                self._insert_initial_exercises(conn)
+
+            # テーブル作成完了後に移行実行（別トランザクション）
+            self.run_database_migrations()
+            
+        except Exception as e:
+            self.logger.error(f"Database initialization failed: {e}")
+            raise
 
     def _insert_initial_exercises(self, conn):
-        """初期種目データ挿入"""
-        # 既存データチェック
-        cursor = conn.execute("SELECT COUNT(*) FROM exercises")
-        if cursor.fetchone()[0] > 0:
-            return  # 既にデータが存在する場合はスキップ
+        """初期種目データ挿入（修正版）"""
+        try:
+            # 既存データチェック
+            cursor = conn.execute("SELECT COUNT(*) FROM exercises")
+            if cursor.fetchone()[0] > 0:
+                return  # 既にデータが存在する場合はスキップ
 
-        exercises_data = [
-            # 胸
-            ('ベンチプレス', 'バーベル', '胸'),
-            ('ベンチプレス', 'ダンベル', '胸'),
-            ('ベンチプレス', 'マシン', '胸'),
-            ('チェストプレス', 'マシン', '胸'),
-            ('ダンベルフライ', 'ダンベル', '胸'),
-            ('ペックフライ', 'マシン', '胸'),
-            ('ケーブルフライ', 'ケーブル', '胸'),
-            ('プッシュアップ', '自重', '胸'),
-            # 背中
-            ('デッドリフト', 'バーベル', '背中'),
-            ('ベントオーバーロウ', 'バーベル', '背中'),
-            ('ラットプルダウン', 'マシン', '背中'),
-            ('シーテッドロウ', 'マシン', '背中'),
-            ('プルアップ', '自重', '背中'),
-            ('懸垂', '自重', '背中'),
-            # 脚
-            ('スクワット', 'バーベル', '脚'),
-            ('スクワット', '自重', '脚'),
-            ('レッグプレス', 'マシン', '脚'),
-            ('レッグカール', 'マシン', '脚'),
-            ('レッグエクステンション', 'マシン', '脚'),
-            # 肩
-            ('ショルダープレス', 'バーベル', '肩'),
-            ('ショルダープレス', 'ダンベル', '肩'),
-            ('ショルダープレス', 'マシン', '肩'),
-            ('サイドレイズ', 'ダンベル', '肩'),
-            ('インクラインサイドレイズ', 'ダンベル', '肩'),
-            ('リアデルト', 'マシン', '肩'),
-            ('フェイスプル', 'ケーブル', '肩'),
-            # 腕
-            ('バーベルカール', 'バーベル', '腕'),
-            ('ダンベルカール', 'ダンベル', '腕'),
-            ('インクラインカール', 'ダンベル', '腕'),
-            ('インクラインハンマーカール', 'ダンベル', '腕'),
-            ('ケーブルカール', 'ケーブル', '腕'),
-            ('トライセップスエクステンション', 'ダンベル', '腕'),
-            ('フレンチプレス', 'ダンベル', '腕'),
-            ('プッシュダウン', 'ケーブル', '腕'),
-            ('ディップス', '自重', '腕'),
-        ]
+            exercises_data = [
+                # 胸
+                ('ベンチプレス', 'バーベル', '胸'),
+                ('ベンチプレス', 'ダンベル', '胸'),
+                ('ベンチプレス', 'マシン', '胸'),
+                ('チェストプレス', 'マシン', '胸'),
+                ('ダンベルフライ', 'ダンベル', '胸'),
+                ('ペックフライ', 'マシン', '胸'),
+                ('ケーブルフライ', 'ケーブル', '胸'),
+                ('プッシュアップ', '自重', '胸'),
+                # 背中
+                ('デッドリフト', 'バーベル', '背中'),
+                ('ベントオーバーロウ', 'バーベル', '背中'),
+                ('ラットプルダウン', 'マシン', '背中'),
+                ('シーテッドロウ', 'マシン', '背中'),
+                ('プルアップ', '自重', '背中'),
+                ('懸垂', '自重', '背中'),
+                # 脚
+                ('スクワット', 'バーベル', '脚'),
+                ('スクワット', '自重', '脚'),
+                ('レッグプレス', 'マシン', '脚'),
+                ('レッグカール', 'マシン', '脚'),
+                ('レッグエクステンション', 'マシン', '脚'),
+                # 肩
+                ('ショルダープレス', 'バーベル', '肩'),
+                ('ショルダープレス', 'ダンベル', '肩'),
+                ('ショルダープレス', 'マシン', '肩'),
+                ('サイドレイズ', 'ダンベル', '肩'),
+                ('リアデルト', 'マシン', '肩'),
+                # 腕
+                ('バーベルカール', 'バーベル', '腕'),
+                ('ダンベルカール', 'ダンベル', '腕'),
+                ('プッシュダウン', 'ケーブル', '腕'),
+                ('ディップス', '自重', '腕'),
+            ]
 
-        conn.executemany(
-            "INSERT INTO exercises (name, variation, category) VALUES (?, ?, ?)",
-            exercises_data
-        )
+            conn.executemany(
+                "INSERT INTO exercises (name, variation, category) VALUES (?, ?, ?)",
+                exercises_data
+            )
+            
+            self.logger.info(f"Inserted {len(exercises_data)} initial exercises")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to insert initial exercises: {e}")
+            raise
 
     # Exercise CRUD operations
     def get_all_exercises(self) -> List[Exercise]:
@@ -1203,35 +1219,35 @@ class DatabaseManager:
         
     # database/db_manager.py に追加するメソッド群
 
-# 既存のDatabaseManagerクラスに以下のメソッドを追加してください
+    # 既存のDatabaseManagerクラスに以下のメソッドを追加してください
 
-def get_body_stats_optimized(self) -> List[BodyStats]:
-    """体組成データ取得（最適化版）"""
-    try:
-        with self.get_connection() as conn:
-            # インデックスを活用した高速クエリ
-            cursor = conn.execute("""
-                SELECT id, date, weight, body_fat_percentage, muscle_mass 
-                FROM body_stats 
-                ORDER BY date DESC
-                LIMIT 1000
-            """)
-            
-            results = []
-            for row in cursor.fetchall():
-                results.append(BodyStats(
-                    id=row[0],
-                    date=row[1],  # SQLiteから直接date型で取得
-                    weight=row[2],
-                    body_fat_percentage=row[3],
-                    muscle_mass=row[4]
-                ))
-            
-            return results
-            
-    except Exception as e:
-        self.logger.error(f"Optimized body stats fetch failed: {e}")
-        return []
+    def get_body_stats_optimized(self) -> List[BodyStats]:
+        """体組成データ取得（最適化版）"""
+        try:
+            with self.get_connection() as conn:
+                # インデックスを活用した高速クエリ
+                cursor = conn.execute("""
+                    SELECT id, date, weight, body_fat_percentage, muscle_mass 
+                    FROM body_stats 
+                    ORDER BY date DESC
+                    LIMIT 1000
+                """)
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append(BodyStats(
+                        id=row[0],
+                        date=row[1],  # SQLiteから直接date型で取得
+                        weight=row[2],
+                        body_fat_percentage=row[3],
+                        muscle_mass=row[4]
+                    ))
+                
+                return results
+                
+        except Exception as e:
+            self.logger.error(f"Optimized body stats fetch failed: {e}")
+            return []
 
     def get_body_stats_summary_optimized(self) -> Dict[str, float]:
         """体組成サマリー取得（最適化版）"""
@@ -1439,47 +1455,467 @@ def get_body_stats_optimized(self) -> List[BodyStats]:
         except Exception as e:
             print(f"テスト失敗: {e}")
             return False    
+        
+    def migrate_database_for_body_composition_goals(self):
+        """体組成目標機能のためのデータベース移行"""
+        try:
+            with self.safe_transaction() as conn:
+                self.logger.info("Starting body composition goals migration...")
+                
+                # 1. 体組成目標テーブル作成
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS body_composition_goals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        goal_name TEXT NOT NULL,
+                        target_weight REAL,
+                        target_muscle_mass REAL,
+                        target_body_fat REAL,
+                        target_bmi REAL,
+                        target_date DATE NOT NULL,
+                        current_weight REAL,
+                        current_muscle_mass REAL,
+                        current_body_fat REAL,
+                        current_bmi REAL,
+                        achieved BOOLEAN DEFAULT FALSE,
+                        notes TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # 2. インデックス作成
+                indexes = [
+                    "CREATE INDEX IF NOT EXISTS idx_body_composition_goals_target_date ON body_composition_goals(target_date)",
+                    "CREATE INDEX IF NOT EXISTS idx_body_composition_goals_achieved ON body_composition_goals(achieved)",
+                    "CREATE INDEX IF NOT EXISTS idx_body_composition_goals_created_at ON body_composition_goals(created_at)"
+                ]
+                
+                for index_sql in indexes:
+                    conn.execute(index_sql)
+                
+                # 3. 既存のbody_statsテーブルにheightカラムを追加（BMI計算用）
+                try:
+                    conn.execute("ALTER TABLE body_stats ADD COLUMN height_cm REAL")
+                    self.logger.info("Added height_cm column to body_stats table")
+                except Exception as e:
+                    # カラムが既に存在する場合はスキップ
+                    if "duplicate column name" not in str(e).lower():
+                        self.logger.warning(f"Could not add height_cm column: {e}")
+                
+                # 4. データベースバージョン管理テーブル作成（将来の移行管理用）
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS database_version (
+                        id INTEGER PRIMARY KEY,
+                        version INTEGER NOT NULL,
+                        migration_name TEXT,
+                        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # 5. 現在の移行を記録
+                conn.execute("""
+                    INSERT OR IGNORE INTO database_version (version, migration_name)
+                    VALUES (1, 'body_composition_goals_initial')
+                """)
+                
+                self.logger.info("Database migration for body composition goals completed successfully")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Failed to migrate database for body composition goals: {e}")
+            return False
 
-# database/models.py のGoalクラスも拡張
-        @dataclass
-        class Goal:
-            """目標モデル - 拡張版"""
-            id: Optional[int]
-            exercise_id: int
-            target_weight: float
-            current_weight: float
-            target_month: str  # YYYY-MM-DD
-            achieved: bool = False
-            notes: Optional[str] = None
-            created_at: Optional[str] = None
-            updated_at: Optional[str] = None
-            
-            def progress_percentage(self) -> int:
-                """進捗率計算"""
-                if self.target_weight <= 0:
+    def check_database_version(self) -> int:
+        """データベースバージョン確認"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='table' AND name='database_version'
+                """)
+                if not cursor.fetchone():
                     return 0
-                return min(int((self.current_weight / self.target_weight) * 100), 100)
-            
-            def remaining_weight(self) -> float:
-                """残り重量計算"""
-                return max(0, self.target_weight - self.current_weight)
-            
-            def is_overdue(self) -> bool:
-                """期限切れ判定"""
-                try:
-                    from datetime import datetime, date
-                    target_date = datetime.strptime(self.target_month, '%Y-%m-%d').date()
-                    return target_date < date.today() and not self.achieved
-                except:
+                
+                cursor = conn.execute("SELECT MAX(version) FROM database_version")
+                row = cursor.fetchone()
+                return row[0] if row and row[0] else 0
+        except Exception as e:
+            self.logger.warning(f"Could not check database version: {e}")
+            return 0
+
+    def run_database_migrations(self):
+        """データベース移行の実行"""
+        current_version = self.check_database_version()
+        self.logger.info(f"Current database version: {current_version}")
+        
+        if current_version < 1:
+            self.logger.info("Running migration for body composition goals...")
+            if self.migrate_database_for_body_composition_goals():
+                self.logger.info("Migration completed successfully")
+            else:
+                self.logger.error("Migration failed")
+                return False
+        
+        final_version = self.check_database_version()
+        self.logger.info(f"Database is now at version {final_version}")
+        return True   
+
+    def init_default_exercises(self):
+        """初期種目データ初期化（エイリアス）"""
+        try:
+            with self.safe_transaction() as conn:
+                self._insert_initial_exercises(conn)
+            self.logger.info("Default exercises initialized")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize default exercises: {e}")
+            raise 
+
+    # database/db_manager.py に追加するCRUD操作メソッド
+    # DatabaseManagerクラス内に以下のメソッドを追加してください
+
+    # ========== 体組成目標CRUD操作 ==========
+
+    def add_body_composition_goal(self, goal: 'BodyCompositionGoal') -> Optional[int]:
+        """体組成目標追加"""
+        try:
+            with self.safe_transaction() as conn:
+                cursor = conn.execute("""
+                    INSERT INTO body_composition_goals 
+                    (goal_name, target_weight, target_muscle_mass, target_body_fat, 
+                    target_bmi, target_date, current_weight, current_muscle_mass, 
+                    current_body_fat, current_bmi, achieved, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    goal.goal_name,
+                    goal.target_weight,
+                    goal.target_muscle_mass, 
+                    goal.target_body_fat,
+                    goal.target_bmi,
+                    goal.target_date,
+                    goal.current_weight,
+                    goal.current_muscle_mass,
+                    goal.current_body_fat,
+                    goal.current_bmi,
+                    goal.achieved,
+                    goal.notes
+                ))
+                
+                goal_id = cursor.lastrowid
+                self.logger.info(f"Body composition goal added: ID {goal_id}, Name '{goal.goal_name}'")
+                return goal_id
+                
+        except Exception as e:
+            self.logger.error(f"Failed to add body composition goal: {e}")
+            return None
+
+    def get_all_body_composition_goals(self) -> List['BodyCompositionGoal']:
+        """全体組成目標取得"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, goal_name, target_weight, target_muscle_mass, 
+                        target_body_fat, target_bmi, target_date, current_weight,
+                        current_muscle_mass, current_body_fat, current_bmi, 
+                        achieved, notes, created_at, updated_at
+                    FROM body_composition_goals
+                    ORDER BY created_at DESC
+                """)
+                
+                # BodyCompositionGoalインポート
+                from .models import BodyCompositionGoal
+                
+                goals = []
+                for row in cursor.fetchall():
+                    # dateオブジェクトに変換
+                    target_date = row[6]
+                    if isinstance(target_date, str):
+                        from datetime import datetime
+                        target_date = datetime.strptime(target_date, '%Y-%m-%d').date()
+                    
+                    goal = BodyCompositionGoal(
+                        id=row[0],
+                        goal_name=row[1],
+                        target_weight=row[2],
+                        target_muscle_mass=row[3],
+                        target_body_fat=row[4],
+                        target_bmi=row[5],
+                        target_date=target_date,
+                        current_weight=row[7],
+                        current_muscle_mass=row[8],
+                        current_body_fat=row[9],
+                        current_bmi=row[10],
+                        achieved=bool(row[11]),
+                        notes=row[12],
+                        created_at=row[13],
+                        updated_at=row[14]
+                    )
+                    goals.append(goal)
+                
+                return goals
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get body composition goals: {e}")
+            return []
+
+    def get_body_composition_goal_by_id(self, goal_id: int) -> Optional['BodyCompositionGoal']:
+        """ID指定で体組成目標取得"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, goal_name, target_weight, target_muscle_mass, 
+                        target_body_fat, target_bmi, target_date, current_weight,
+                        current_muscle_mass, current_body_fat, current_bmi, 
+                        achieved, notes, created_at, updated_at
+                    FROM body_composition_goals
+                    WHERE id = ?
+                """, (goal_id,))
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                # BodyCompositionGoalインポート
+                from .models import BodyCompositionGoal
+                
+                # dateオブジェクトに変換
+                target_date = row[6]
+                if isinstance(target_date, str):
+                    from datetime import datetime
+                    target_date = datetime.strptime(target_date, '%Y-%m-%d').date()
+                
+                return BodyCompositionGoal(
+                    id=row[0],
+                    goal_name=row[1],
+                    target_weight=row[2],
+                    target_muscle_mass=row[3],
+                    target_body_fat=row[4],
+                    target_bmi=row[5],
+                    target_date=target_date,
+                    current_weight=row[7],
+                    current_muscle_mass=row[8],
+                    current_body_fat=row[9],
+                    current_bmi=row[10],
+                    achieved=bool(row[11]),
+                    notes=row[12],
+                    created_at=row[13],
+                    updated_at=row[14]
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get body composition goal by ID {goal_id}: {e}")
+            return None
+
+    def update_body_composition_goal(self, goal: 'BodyCompositionGoal') -> bool:
+        """体組成目標更新"""
+        try:
+            with self.safe_transaction() as conn:
+                cursor = conn.execute("""
+                    UPDATE body_composition_goals 
+                    SET goal_name = ?, target_weight = ?, target_muscle_mass = ?, 
+                        target_body_fat = ?, target_bmi = ?, target_date = ?,
+                        current_weight = ?, current_muscle_mass = ?, current_body_fat = ?,
+                        current_bmi = ?, achieved = ?, notes = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (
+                    goal.goal_name,
+                    goal.target_weight,
+                    goal.target_muscle_mass,
+                    goal.target_body_fat,
+                    goal.target_bmi,
+                    goal.target_date,
+                    goal.current_weight,
+                    goal.current_muscle_mass,
+                    goal.current_body_fat,
+                    goal.current_bmi,
+                    goal.achieved,
+                    goal.notes,
+                    goal.id
+                ))
+                
+                if cursor.rowcount > 0:
+                    self.logger.info(f"Body composition goal updated: ID {goal.id}")
+                    return True
+                else:
+                    self.logger.warning(f"No body composition goal found with ID {goal.id}")
                     return False
-            
-            def days_remaining(self) -> Optional[int]:
-                """残り日数計算"""
-                try:
-                    from datetime import datetime, date
-                    target_date = datetime.strptime(self.target_month, '%Y-%m-%d').date()
-                    today = date.today()
-                    delta = (target_date - today).days
-                    return max(0, delta)
-                except:
-                    return None    
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to update body composition goal: {e}")
+            return False
+
+    def delete_body_composition_goal(self, goal_id: int) -> bool:
+        """体組成目標削除"""
+        try:
+            with self.safe_transaction() as conn:
+                cursor = conn.execute("""
+                    DELETE FROM body_composition_goals WHERE id = ?
+                """, (goal_id,))
+                
+                if cursor.rowcount > 0:
+                    self.logger.info(f"Body composition goal deleted: ID {goal_id}")
+                    return True
+                else:
+                    self.logger.warning(f"No body composition goal found with ID {goal_id}")
+                    return False
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to delete body composition goal: {e}")
+            return False
+
+    def update_body_composition_goal_progress(self, goal_id: int) -> bool:
+        """体組成目標の進捗を最新の体組成データから自動更新"""
+        try:
+            with self.safe_transaction() as conn:
+                # 最新の体組成データを取得
+                cursor = conn.execute("""
+                    SELECT weight, body_fat_percentage, muscle_mass
+                    FROM body_stats
+                    ORDER BY date DESC
+                    LIMIT 1
+                """)
+                
+                latest_stats = cursor.fetchone()
+                if not latest_stats:
+                    self.logger.info("No body stats found for progress update")
+                    return False
+                
+                # BMI計算（身長データが必要だが、とりあえず現在の体重のみ更新）
+                current_weight = latest_stats[0]
+                current_body_fat = latest_stats[1]
+                current_muscle_mass = latest_stats[2]
+                
+                # 目標の現在値を更新
+                cursor = conn.execute("""
+                    UPDATE body_composition_goals
+                    SET current_weight = ?, 
+                        current_body_fat = ?, 
+                        current_muscle_mass = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (current_weight, current_body_fat, current_muscle_mass, goal_id))
+                
+                if cursor.rowcount > 0:
+                    self.logger.info(f"Body composition goal progress updated: ID {goal_id}")
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to update body composition goal progress: {e}")
+            return False
+
+    def get_active_body_composition_goals(self) -> List['BodyCompositionGoal']:
+        """未達成の体組成目標のみ取得"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, goal_name, target_weight, target_muscle_mass, 
+                        target_body_fat, target_bmi, target_date, current_weight,
+                        current_muscle_mass, current_body_fat, current_bmi, 
+                        achieved, notes, created_at, updated_at
+                    FROM body_composition_goals
+                    WHERE achieved = FALSE
+                    ORDER BY target_date ASC
+                """)
+                
+                # BodyCompositionGoalインポート
+                from .models import BodyCompositionGoal
+                
+                goals = []
+                for row in cursor.fetchall():
+                    # dateオブジェクトに変換
+                    target_date = row[6]
+                    if isinstance(target_date, str):
+                        from datetime import datetime
+                        target_date = datetime.strptime(target_date, '%Y-%m-%d').date()
+                    
+                    goal = BodyCompositionGoal(
+                        id=row[0],
+                        goal_name=row[1],
+                        target_weight=row[2],
+                        target_muscle_mass=row[3],
+                        target_body_fat=row[4],
+                        target_bmi=row[5],
+                        target_date=target_date,
+                        current_weight=row[7],
+                        current_muscle_mass=row[8],
+                        current_body_fat=row[9],
+                        current_bmi=row[10],
+                        achieved=bool(row[11]),
+                        notes=row[12],
+                        created_at=row[13],
+                        updated_at=row[14]
+                    )
+                    goals.append(goal)
+                
+                return goals
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get active body composition goals: {e}")
+            return []
+
+    def mark_body_composition_goal_as_achieved(self, goal_id: int) -> bool:
+        """体組成目標を達成済みにマーク"""
+        try:
+            with self.safe_transaction() as conn:
+                cursor = conn.execute("""
+                    UPDATE body_composition_goals 
+                    SET achieved = TRUE, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (goal_id,))
+                
+                if cursor.rowcount > 0:
+                    self.logger.info(f"Body composition goal marked as achieved: ID {goal_id}")
+                    return True
+                else:
+                    return False
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to mark body composition goal as achieved: {e}")
+            return False
+
+    def get_body_composition_goals_summary(self) -> Dict[str, Any]:
+        """体組成目標のサマリー情報取得"""
+        try:
+            with self.get_connection() as conn:
+                # 総目標数
+                cursor = conn.execute("SELECT COUNT(*) FROM body_composition_goals")
+                total_goals = cursor.fetchone()[0]
+                
+                # 達成済み目標数
+                cursor = conn.execute("SELECT COUNT(*) FROM body_composition_goals WHERE achieved = TRUE")
+                achieved_goals = cursor.fetchone()[0]
+                
+                # 未達成目標数
+                active_goals = total_goals - achieved_goals
+                
+                # 期限切れ目標数
+                cursor = conn.execute("""
+                    SELECT COUNT(*) FROM body_composition_goals 
+                    WHERE achieved = FALSE AND target_date < date('now')
+                """)
+                overdue_goals = cursor.fetchone()[0]
+                
+                # 達成率計算
+                achievement_rate = (achieved_goals / total_goals * 100) if total_goals > 0 else 0
+                
+                return {
+                    'total': total_goals,
+                    'achieved': achieved_goals,
+                    'active': active_goals,
+                    'overdue': overdue_goals,
+                    'achievement_rate': round(achievement_rate, 1)
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get body composition goals summary: {e}")
+            return {
+                'total': 0,
+                'achieved': 0, 
+                'active': 0,
+                'overdue': 0,
+                'achievement_rate': 0
+            }    
+
+ 

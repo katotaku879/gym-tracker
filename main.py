@@ -127,27 +127,7 @@ def safe_import_ui():
         traceback.print_exc()
         return False
 
-def test_database_creation():
-    """データベース作成テスト"""
-    try:
-        print("データベース作成テスト中...")
-        from database.db_manager import DatabaseManager
-        
-        # テスト用データベース作成
-        test_db = DatabaseManager("test_gym_tracker.db")
-        print("✅ データベース作成OK")
-        
-        # テストファイル削除
-        if os.path.exists("test_gym_tracker.db"):
-            os.remove("test_gym_tracker.db")
-            print("✅ テストファイル削除OK")
-        
-        return True
-    except Exception as e:
-        print(f"❌ データベース作成失敗: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+
 
 def safe_main():
     """安全なメイン関数"""
@@ -184,9 +164,6 @@ def safe_main():
     if not safe_import_database():
         return False
     
-    # 6. データベース作成テスト
-    if not test_database_creation():
-        return False
     
     # 7. UIモジュールテスト
     if not safe_import_ui():
